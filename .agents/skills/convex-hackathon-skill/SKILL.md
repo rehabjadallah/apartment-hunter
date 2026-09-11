@@ -1,4 +1,4 @@
----
+  ---
 name: convex-hackathon-skill
 description: Create and update an evidence-based hackathon.md build log for a Convex project. Use when a user invokes $convex-hackathon-skill, /convex-hackathon-skill, or /hackathon; mentions a Convex hackathon; asks to start, backfill, refresh, or correct a hackathon build log; or wants submission-ready project history. Work from local repository evidence, keep claims honest, exclude secrets and personal data, and never submit, deploy, or commit.
 ---

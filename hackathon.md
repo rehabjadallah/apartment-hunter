@@ -11,8 +11,8 @@
 - **Convex features:** none yet
 - **Auth:** none
 - **AI models:** none
-- **Started:** 2026-09-04T19:50:50Z
-- **Last updated:** 2026-09-04T19:55:43Z
+- **Started:** 2026-09-04T19:57:21Z
+- **Last updated:** 2026-09-04T19:57:21Z
 
 ## Log
 
@@ -23,3 +23,9 @@ Verified Codex discovery of the official Convex plugin and all 19 skills, plus b
 Activation in the current session is pending a Codex restart. Hosting confirmation is pending.
 The repository has no commits or application source to backfill; Started records the skill installation time.
 No Convex application or hosting component has been initialized.
+
+### 2026-09-04 - 4001252
+Recorded the build log and project-local hackathon skill in the first commit
+(`hackathon.md`, `.agents/skills/convex-hackathon-skill/SKILL.md`, and its `references/log-format.md`).
+Set Started to the first commit time, replacing the initial installation-time fallback.
+The repository still contains no application source or Convex configuration.
