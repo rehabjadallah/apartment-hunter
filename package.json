@@ -1,7 +1,35 @@
 {
+  "name": "apartment-hunter",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "dev": "vite",
+    "dev:backend": "convex dev",
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "preview": "vite preview"
+  },
   "dependencies": {
     "@agentmail/convex": "^0.1.0",
+    "@convex-dev/auth": "https://pkg.pr.new/@convex-dev/auth@reboot",
     "@convex-dev/static-hosting": "^0.2.1",
-    "@firecrawl/firecrawl-convex": "^0.1.1"
+    "@firecrawl/firecrawl-convex": "^0.1.1",
+    "convex": "^1.45.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.5.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "convex-test": "^0.0.58",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.0"
   }
 }
