@@ -78,8 +78,8 @@ npx convex run services:checkAgentmail
 ```
 
 Credential presence does not verify whether an API key is valid. The AgentMail
-check calls the service and reads/caches one existing inbox, if available; it
-does not create an inbox or send a message.
+check verifies read access only and reads/caches one existing inbox, if available;
+it does not verify write access, create an inbox, or send a message.
 
 ## Checks
 
