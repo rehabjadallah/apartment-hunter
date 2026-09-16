@@ -59,17 +59,27 @@ webhooks. A listing without an email links users to the original contact form.
 
 Searches and conversations enforce ownership in the backend. Searches are
 limited to one per minute per account, inquiries to ten per day. There are no
-global abuse controls yet; public rollout needs a separate review. Failed
-inquiries currently show an error and do not have a retry button.
+global abuse controls yet; public rollout needs a separate review. If preparation
+fails before an outbound message exists, open **Follow up** on the same listing,
+review the message, and send again. Already queued messages are not resubmitted.
+
+The installed AgentMail 0.1.0 component needs a compatibility patch, applied
+automatically by `patch-package` during `npm ci`. It exposes the inbox/thread
+actions to the parent backend and declares the component's API key environment
+variable. `convex/convex.config.ts` passes the key into the component. Keep the
+patch until an upstream release includes these fixes; do not skip install scripts.
 
 An admin can check credential presence without displaying values:
 
 ```sh
 npx convex run setup:credentials
 npx convex run health:check
+npx convex run services:checkAgentmail
 ```
 
-Credential presence does not verify whether an API key is valid.
+Credential presence does not verify whether an API key is valid. The AgentMail
+check verifies read access only and reads/caches one existing inbox, if available;
+it does not verify write access, create an inbox, or send a message.
 
 ## Checks
 

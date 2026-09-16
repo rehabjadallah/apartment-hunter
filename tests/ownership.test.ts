@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 
@@ -44,7 +44,33 @@ describe("Private apartment data", () => {
   });
   test("repeat inquiry requests do not queue another message", async () => {
     const { t, owner, listingId, inquiryId } = await fixture();
+    await t.run(ctx => ctx.db.patch(inquiryId, { status: "queued" }));
     expect(await t.withIdentity({ subject: owner }).mutation(api.inquiries.send, { listingId, subject: "Hello", body: "Test" })).toBe(inquiryId);
     expect(await t.run(ctx => ctx.db.query("inquiries").collect())).toHaveLength(1);
+  });
+  test("a preparation failure can be resubmitted once without duplicating the inquiry", async () => {
+    vi.useFakeTimers();
+    try {
+      const { t, owner, listingId, inquiryId } = await fixture();
+      const client = t.withIdentity({ subject: owner });
+      const args = { listingId, subject: "Retry", body: "Reviewed test message" };
+      expect(await client.mutation(api.inquiries.send, args)).toBe(inquiryId);
+      expect(await client.mutation(api.inquiries.send, args)).toBe(inquiryId);
+      const items = await t.run(ctx => ctx.db.query("inquiries").collect());
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ status: "preparing", subject: "Retry", body: args.body });
+      const scheduled = await t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
+      expect(scheduled).toHaveLength(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+  test("a failed inquiry with an outbound message cannot be resubmitted", async () => {
+    const { t, owner, listingId, inquiryId } = await fixture();
+    await t.run(ctx => ctx.db.patch(inquiryId, { outboundId: "already-queued" }));
+    await t.withIdentity({ subject: owner }).mutation(api.inquiries.send, { listingId, subject: "Retry", body: "Test" });
+    expect((await t.run(ctx => ctx.db.get(inquiryId)))?.status).toBe("failed");
+    expect(await t.run(ctx => ctx.db.system.query("_scheduled_functions").collect())).toHaveLength(0);
   });
 });

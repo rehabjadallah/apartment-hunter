@@ -1,0 +1,179 @@
+diff --git a/node_modules/@agentmail/convex/dist/component/convex.config.js b/node_modules/@agentmail/convex/dist/component/convex.config.js
+index 3d15ed6..59be31d 100644
+--- a/node_modules/@agentmail/convex/dist/component/convex.config.js
++++ b/node_modules/@agentmail/convex/dist/component/convex.config.js
+@@ -1,6 +1,9 @@
+ import { defineComponent } from "convex/server";
++import { v } from "convex/values";
+ import workpool from "@convex-dev/workpool/convex.config";
+-const component = defineComponent("agentmail");
++const component = defineComponent("agentmail", {
++    env: { AGENTMAIL_API_KEY: v.string() },
++});
+ component.use(workpool, { name: "sendPool" });
+ component.use(workpool, { name: "callbackPool" });
+ export default component;
+diff --git a/node_modules/@agentmail/convex/dist/component/lib.js b/node_modules/@agentmail/convex/dist/component/lib.js
+index c245802..341ba22 100644
+--- a/node_modules/@agentmail/convex/dist/component/lib.js
++++ b/node_modules/@agentmail/convex/dist/component/lib.js
+@@ -1,5 +1,5 @@
+ import { v } from "convex/values";
+-import { internalAction, internalMutation, internalQuery, mutation, query, } from "./_generated/server.js";
++import { action, internalAction, internalMutation, internalQuery, mutation, query, } from "./_generated/server.js";
+ import { components, internal } from "./_generated/api.js";
+ import { Workpool } from "@convex-dev/workpool";
+ import { vRuntimeConfig, vSendKind, vSendPayload, } from "./shared.js";
+@@ -17,7 +17,7 @@ const callbackPool = new Workpool(components.callbackPool, {
+ // ---------------------------------------------------------------------------
+ // Inboxes
+ // ---------------------------------------------------------------------------
+-export const createInbox = internalAction({
++export const createInbox = action({
+     args: {
+         request: v.object({
+             username: v.optional(v.string()),
+@@ -35,7 +35,7 @@ export const createInbox = internalAction({
+         return inbox;
+     },
+ });
+-export const listInboxes = internalAction({
++export const listInboxes = action({
+     args: {
+         limit: v.optional(v.number()),
+         page_token: v.optional(v.string()),
+@@ -52,7 +52,7 @@ export const listInboxes = internalAction({
+         });
+     },
+ });
+-export const getInboxRemote = internalAction({
++export const getInboxRemote = action({
+     args: { inboxId: v.string() },
+     handler: async (ctx, args) => {
+         const inbox = (await agentmailFetch(`/inboxes/${args.inboxId}`, {
+@@ -62,7 +62,7 @@ export const getInboxRemote = internalAction({
+         return inbox;
+     },
+ });
+-export const deleteInbox = internalAction({
++export const deleteInbox = action({
+     args: { inboxId: v.string() },
+     handler: async (ctx, args) => {
+         await agentmailFetch(`/inboxes/${args.inboxId}`, {
+@@ -310,7 +310,7 @@ export const getOutboundStatus = query({
+ // ---------------------------------------------------------------------------
+ // Threads / messages: thin wrappers over remote API
+ // ---------------------------------------------------------------------------
+-export const listThreads = internalAction({
++export const listThreads = action({
+     args: {
+         inboxId: v.string(),
+         limit: v.optional(v.number()),
+@@ -332,13 +332,13 @@ export const listThreads = internalAction({
+         });
+     },
+ });
+-export const getThread = internalAction({
++export const getThread = action({
+     args: { inboxId: v.string(), threadId: v.string() },
+     handler: async (_ctx, args) => {
+         return await agentmailFetch(`/inboxes/${args.inboxId}/threads/${args.threadId}`, { method: "GET" });
+     },
+ });
+-export const getMessage = internalAction({
++export const getMessage = action({
+     args: { inboxId: v.string(), messageId: v.string() },
+     handler: async (_ctx, args) => {
+         return await agentmailFetch(`/inboxes/${args.inboxId}/messages/${args.messageId}`, { method: "GET" });
+diff --git a/node_modules/@agentmail/convex/src/component/convex.config.ts b/node_modules/@agentmail/convex/src/component/convex.config.ts
+index b1cc7f1..e1f38ec 100644
+--- a/node_modules/@agentmail/convex/src/component/convex.config.ts
++++ b/node_modules/@agentmail/convex/src/component/convex.config.ts
+@@ -1,7 +1,12 @@
+ import { defineComponent } from "convex/server";
++import { v } from "convex/values";
+ import workpool from "@convex-dev/workpool/convex.config";
+ 
+-const component = defineComponent("agentmail");
++// Declare the API key so the parent can pass it in via `app.use(agentmail, { env })`.
++// Component functions read it from process.env, which the typed env populates.
++const component = defineComponent("agentmail", {
++  env: { AGENTMAIL_API_KEY: v.string() },
++});
+ component.use(workpool, { name: "sendPool" });
+ component.use(workpool, { name: "callbackPool" });
+ 
+diff --git a/node_modules/@agentmail/convex/src/component/lib.ts b/node_modules/@agentmail/convex/src/component/lib.ts
+index 121dd58..0f631ac 100644
+--- a/node_modules/@agentmail/convex/src/component/lib.ts
++++ b/node_modules/@agentmail/convex/src/component/lib.ts
+@@ -1,5 +1,6 @@
+ import { v } from "convex/values";
+ import {
++  action,
+   internalAction,
+   internalMutation,
+   internalQuery,
+@@ -40,7 +41,7 @@ const callbackPool = new Workpool(components.callbackPool, {
+ // Inboxes
+ // ---------------------------------------------------------------------------
+ 
+-export const createInbox = internalAction({
++export const createInbox = action({
+   args: {
+     request: v.object({
+       username: v.optional(v.string()),
+@@ -59,7 +60,7 @@ export const createInbox = internalAction({
+   },
+ });
+ 
+-export const listInboxes = internalAction({
++export const listInboxes = action({
+   args: {
+     limit: v.optional(v.number()),
+     page_token: v.optional(v.string()),
+@@ -77,7 +78,7 @@ export const listInboxes = internalAction({
+   },
+ });
+ 
+-export const getInboxRemote = internalAction({
++export const getInboxRemote = action({
+   args: { inboxId: v.string() },
+   handler: async (ctx, args) => {
+     const inbox = (await agentmailFetch(`/inboxes/${args.inboxId}`, {
+@@ -88,7 +89,7 @@ export const getInboxRemote = internalAction({
+   },
+ });
+ 
+-export const deleteInbox = internalAction({
++export const deleteInbox = action({
+   args: { inboxId: v.string() },
+   handler: async (ctx, args) => {
+     await agentmailFetch(`/inboxes/${args.inboxId}`, {
+@@ -362,7 +363,7 @@ export const getOutboundStatus = query({
+ // Threads / messages: thin wrappers over remote API
+ // ---------------------------------------------------------------------------
+ 
+-export const listThreads = internalAction({
++export const listThreads = action({
+   args: {
+     inboxId: v.string(),
+     limit: v.optional(v.number()),
+@@ -385,7 +386,7 @@ export const listThreads = internalAction({
+   },
+ });
+ 
+-export const getThread = internalAction({
++export const getThread = action({
+   args: { inboxId: v.string(), threadId: v.string() },
+   handler: async (_ctx, args) => {
+     return await agentmailFetch(
+@@ -395,7 +396,7 @@ export const getThread = internalAction({
+   },
+ });
+ 
+-export const getMessage = internalAction({
++export const getMessage = action({
+   args: { inboxId: v.string(), messageId: v.string() },
+   handler: async (_ctx, args) => {
+     return await agentmailFetch(

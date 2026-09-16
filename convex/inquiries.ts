@@ -17,7 +17,14 @@ export const send = mutation({
     if (!listing.contactEmail) throw new ConvexError("This listing has no published email contact.");
     if (!args.subject.trim() || args.subject.length > 200 || /[\r\n]/.test(args.subject) || !args.body.trim() || args.body.length > 5000) throw new ConvexError("Please check the subject and message.");
     const existing = await ctx.db.query("inquiries").withIndex("by_user_listing", q => q.eq("userId", user._id).eq("listingId", listing._id)).first();
-    if (existing) return existing._id;
+    if (existing) {
+      // Only preparation failures are safe to retry: no outbound message exists.
+      if (existing.status === "failed" && !existing.outboundId) {
+        await ctx.db.patch(existing._id, { subject: args.subject, body: args.body, status: "preparing", error: undefined });
+        await ctx.scheduler.runAfter(0, internal.inquiries.prepare, { inquiryId: existing._id });
+      }
+      return existing._id;
+    }
     const recent = await ctx.db.query("inquiries").withIndex("by_user", q => q.eq("userId", user._id)).order("desc").take(10);
     if (recent.filter(i => Date.now() - i._creationTime < 86400000).length >= 10) throw new ConvexError("You can send up to 10 inquiries per day.");
     const inquiryId = await ctx.db.insert("inquiries", { ...args, userId: user._id, status: "preparing" });
@@ -75,7 +82,11 @@ export const prepare = internalAction({
       const inboxId = data.user.inboxId ?? (await mail.createInbox(ctx, { displayName: "Apartment Hunter", clientId: data.user._id })).inbox_id;
       if (typeof inboxId !== "string") throw new Error("No inbox returned");
       await ctx.runMutation(internal.inquiries.enqueue, { inquiryId, inboxId });
-    } catch { await ctx.runMutation(internal.inquiries.fail, { inquiryId }); }
+    } catch (error) {
+      // Keep service details out of the UI while retaining a server-side diagnosis.
+      console.error("Inquiry preparation failed", error instanceof Error ? error.message : "Unknown error");
+      await ctx.runMutation(internal.inquiries.fail, { inquiryId });
+    }
   },
 });
 
