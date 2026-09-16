@@ -1,7 +1,7 @@
 import { FirecrawlClient } from "@firecrawl/firecrawl-convex";
 import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
-import { internalAction } from "./_generated/server";
+import { internalAction, internalQuery } from "./_generated/server";
 
 const firecrawl = new FirecrawlClient(components.firecrawl);
 const nullable = (type: string) => ({ type: [type, "null"] });
@@ -14,19 +14,47 @@ const schema = {
   },
 };
 
+const record = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === "object" ? value as Record<string, unknown> : undefined;
+
+function scrapeDiagnostic(value: unknown) {
+  const outer = record(value); const data = record(outer?.data) ?? outer;
+  const metadata = record(data?.metadata);
+  const status = metadata?.statusCode ?? data?.statusCode ?? data?.status;
+  const message = typeof data?.message === "string" ? data.message : typeof metadata?.error === "string" ? metadata.error : "";
+  const statusCode = typeof status === "number" ? status : Number(message.match(/failed \((\d{3})\)/)?.[1]) || "unknown";
+  const headers = record(metadata?.headers) ?? record(data?.headers);
+  const challenge = Object.entries(headers ?? {}).some(([key, value]) => key.toLowerCase() === "cf-mitigated" && value === "challenge");
+  const reason = statusCode !== 403 ? undefined : /we do not support this site/i.test(message) ? "Firecrawl policy refusal"
+    : challenge ? "Cloudflare challenge" : "Unclassified HTTP 403";
+  return { statusCode, ...(reason ? { reason } : {}) };
+}
+
+export const listingCount = internalQuery({
+  args: { searchId: v.id("searches") }, returns: v.number(),
+  handler: async (ctx, { searchId }) => {
+    // Count stored rows because addListing can skip a search that has timed out.
+    const listings = await ctx.db.query("listings").withIndex("by_search", q => q.eq("searchId", searchId)).collect();
+    return listings.length;
+  },
+});
+
 export const run = internalAction({
   args: { searchId: v.id("searches") },
   handler: async (ctx, { searchId }) => {
     const search = await ctx.runQuery(internal.searches.get, { searchId });
     if (!search || search.status !== "searching") return;
     const p = search.preferences;
+    const counts = { urlsReturned: 0, urlsAfterDeduplication: 0, pagesWithContent: 0, listingsInserted: 0 };
+    let error: string | undefined;
     try {
       const response = await firecrawl.search(ctx,
         `Ann Arbor Michigan ${p.bedrooms === 0 ? "studio" : `${p.bedrooms} bedroom`} apartments floor plans rent ${p.pets === "none" ? "" : `${p.pets} friendly`}`,
         { limit: 8, location: "Ann Arbor, Michigan, United States", sources: ["web"],
           excludeDomains: ["zillow.com", "apartments.com", "realtor.com", "redfin.com", "reddit.com"] });
+      counts.urlsReturned = (response.web ?? []).filter(item => typeof item.url === "string").length;
       const seen = new Set<string>();
-      const urls = (response.web ?? []).flatMap(item => {
+      const uniqueUrls = (response.web ?? []).flatMap(item => {
         if (typeof item.url !== "string") return [];
         try {
           const url = new URL(item.url);
@@ -34,7 +62,9 @@ export const run = internalAction({
           seen.add(url.href);
           return [url.href];
         } catch { return []; }
-      }).slice(0, 5);
+      });
+      counts.urlsAfterDeduplication = uniqueUrls.length;
+      const urls = uniqueUrls.slice(0, 5);
       let scraped = 0;
       await Promise.all(urls.map(async url => {
         try {
@@ -43,6 +73,8 @@ export const run = internalAction({
             onlyMainContent: true, timeout: 45000, maxAge: 3600000,
           });
           scraped++;
+          console.info("Firecrawl page", { searchId, url, ...scrapeDiagnostic(page) });
+          if (page.markdown?.trim() || Object.keys(record(page.json) ?? {}).length > 0) counts.pagesWithContent++;
           const d = page.json as Record<string, unknown> | undefined;
           if (!d || d.isListing !== true || typeof d.city !== "string" || !/^ann arbor(?:,?\s+(?:mi|michigan))?$/i.test(d.city.trim())) return;
           const rent = typeof d.rent === "number" && d.rent >= 0 ? d.rent : undefined;
@@ -68,12 +100,18 @@ export const run = internalAction({
             summary: typeof d.summary === "string" ? d.summary.slice(0, 600) : "View the original listing for details.",
             rent, bedrooms, contactEmail, matches, unknowns,
           });
-        } catch { /* One inaccessible listing must not discard other results. */ }
+        } catch (error) {
+          // One inaccessible listing must not discard other results.
+          console.error("Firecrawl page failed", { searchId, url, ...scrapeDiagnostic(error) }, error);
+        }
       }));
-      await ctx.runMutation(internal.searches.finish, { searchId,
-        error: urls.length > 0 && scraped === 0 ? "The listing sites could not be read. Please try again." : undefined });
-    } catch {
-      await ctx.runMutation(internal.searches.finish, { searchId, error: "The listing search failed. Please try again shortly." });
+      counts.listingsInserted = await ctx.runQuery(internal.discovery.listingCount, { searchId });
+      error = urls.length > 0 && scraped === 0 ? "The listing sites could not be read. Please try again." : undefined;
+    } catch (cause) {
+      console.error("Firecrawl discovery failed", { searchId }, cause);
+      error = "The listing search failed. Please try again shortly.";
     }
+    console.info("Firecrawl discovery counts", { searchId, ...counts });
+    await ctx.runMutation(internal.searches.finish, { searchId, error });
   },
 });
