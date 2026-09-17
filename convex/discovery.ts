@@ -90,9 +90,13 @@ export const run = internalAction({
           console.info("Firecrawl page", { searchId, url, ...scrapeDiagnostic(page),
             isListing: d?.isListing ?? null, city: d?.city ?? null, unitsExtracted: units.length });
           if (page.markdown?.trim() || Object.keys(record(page.json) ?? {}).length > 0) counts.pagesWithContent++;
-          if (!d || d.isListing !== true || typeof d.city !== "string" || !/^ann arbor(?:,?\s+(?:mi|michigan))?$/i.test(d.city.trim())) {
-            const reason = !d || d.isListing !== true ? "isListing false" : typeof d.city !== "string" ? "city null" : "city conflict";
-            console.info("Firecrawl page rejected", { searchId, url, reason, value: reason === "isListing false" ? d?.isListing ?? null : d?.city ?? null });
+          if (!d || units.length === 0) {
+            console.info("Firecrawl page rejected", { searchId, url, reason: "units empty", value: units.length });
+            return;
+          }
+          const city = typeof d.city === "string" ? d.city.trim() : undefined;
+          if (city !== undefined && !/^ann arbor(?: charter township)?(?:,?\s+(?:mi|michigan))?$/i.test(city)) {
+            console.info("Firecrawl page rejected", { searchId, url, reason: "city conflict", value: d.city });
             return;
           }
           if ((p.pets === "cat" && d.cats === false) || (p.pets === "dog" && d.dogs === false) || (p.parking && d.parking === false) || (p.laundry && d.laundry === false)) return;
@@ -106,8 +110,9 @@ export const run = internalAction({
             const bedrooms = typeof u.bedrooms === "number" && u.bedrooms >= 0 ? u.bedrooms : undefined;
             if (rent !== undefined && (rent < p.minRent || rent > p.maxRent)) { drops["rent out of range"]++; continue; }
             if (bedrooms !== undefined && bedrooms !== p.bedrooms) { drops["bedrooms mismatch"]++; continue; }
-            const matches = ["Ann Arbor"];
+            const matches = city === undefined ? [] : ["Ann Arbor"];
             const unknowns = ["Move-in availability and current pricing need confirmation"];
+            if (city === undefined) unknowns.push("City not confirmed");
             if (rent === undefined) unknowns.push("Rent not confirmed"); else matches.push("Within your rent range");
             if (bedrooms === undefined) unknowns.push("Bedrooms not confirmed"); else matches.push(`${bedrooms === 0 ? "Studio" : `${bedrooms} bedrooms`}`);
             for (const [needed, value, label] of [

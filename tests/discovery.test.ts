@@ -102,14 +102,14 @@ test("unit conflicts do not discard other units and each listing has its own unk
 });
 test("logs distinguish rejected pages, empty unit arrays, and fully filtered units", async () => {
   const result = await run([
-    { ...matching, isListing: false }, { ...matching, city: null }, { ...matching, city: "Ypsilanti" },
+    { ...matching, isListing: false, units: [] }, { ...matching, city: null, units: [] }, { ...matching, city: "Ypsilanti" },
     { ...matching, units: [] }, { ...matching, units: [
       { ...matchingUnit, rent: 2400, bedrooms: 2 }, { ...matchingUnit, bedrooms: 2 },
     ] },
   ]);
   expect(result.listings).toHaveLength(0);
   expect(result.search?.status).toBe("complete");
-  for (const [index, reason, value] of [[0, "isListing false", false], [1, "city null", null], [2, "city conflict", "Ypsilanti"]] as const) {
+  for (const [index, reason, value] of [[0, "units empty", 0], [1, "units empty", 0], [2, "city conflict", "Ypsilanti"]] as const) {
     expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
       url: `https://example.com/${index}`, reason, value,
     }));
@@ -117,22 +117,63 @@ test("logs distinguish rejected pages, empty unit arrays, and fully filtered uni
   expect(console.info).toHaveBeenCalledWith("Firecrawl page", expect.objectContaining({
     url: "https://example.com/3", isListing: true, city: "Ann Arbor", unitsExtracted: 0,
   }));
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/3", "rent out of range": 0, "bedrooms mismatch": 0,
+  expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
+    url: "https://example.com/3", reason: "units empty", value: 0,
   }));
   expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
     url: "https://example.com/4", "rent out of range": 1, "bedrooms mismatch": 1,
   }));
-  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 5, unitsInserted: 0 }));
+  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 3, unitsInserted: 0 }));
 });
 test("page conflicts exclude every unit", async () => {
   const page = { ...matching, units: [matchingUnit, { ...matchingUnit, title: "Another plan" }] };
   const result = await run([{ ...page, cats: false }, { ...page, parking: false }, { ...page, laundry: false }, { ...page, city: "Ypsilanti" }]);
   expect(result.listings).toHaveLength(0);
 });
-test("a directory page inserts nothing even when it contains units", async () => {
-  const result = await run([{ ...matching, isListing: false, units: [matchingUnit, matchingUnit] }]);
+test("pages with floor plans are kept when isListing is false or null", async () => {
+  const result = await run([3, 7, 24].map((count, i) => ({ ...matching, isListing: i === 1 ? null : false,
+    units: Array.from({ length: count }, (_, j) => ({ ...matchingUnit, title: `Property ${i} plan ${j}` })),
+  })));
+  expect(result.listings).toHaveLength(34);
+  expect(result.listings.filter(listing => listing.url === "https://example.com/0")).toHaveLength(3);
+  expect(result.listings.filter(listing => listing.url === "https://example.com/1")).toHaveLength(7);
+  expect(result.listings.filter(listing => listing.url === "https://example.com/2")).toHaveLength(24);
+  expect(console.info).not.toHaveBeenCalledWith("Firecrawl page rejected", expect.anything());
+  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 34, unitsInserted: 34 }));
+});
+test("empty unit arrays insert nothing regardless of isListing", async () => {
+  const result = await run([true, false, null].map(isListing => ({ ...matching, isListing, units: [] })));
   expect(result.listings).toHaveLength(0);
+});
+test("an unknown city is unconfirmed on each inserted unit", async () => {
+  const result = await run([{ ...matching, isListing: false, city: null, units: [matchingUnit, { ...matchingUnit, title: "Another plan" }] }]);
+  expect(result.listings).toHaveLength(2);
+  for (const listing of result.listings) {
+    expect(listing.unknowns).toContain("City not confirmed");
+    expect(listing.matches).not.toContain("Ann Arbor");
+  }
+});
+test("Ann Arbor and Ann Arbor Charter Township accept case, whitespace, and state suffixes", async () => {
+  const result = await run(["Ann Arbor", "Ann Arbor, MI", "Ann Arbor Michigan", "Ann Arbor Charter Township", " ann arbor charter township, mi "]
+    .map(city => ({ ...matching, isListing: null, city })));
+  expect(result.listings).toHaveLength(5);
+  for (const listing of result.listings) {
+    expect(listing.matches).toContain("Ann Arbor");
+    expect(listing.unknowns).not.toContain("City not confirmed");
+  }
+});
+test("overriding isListing keeps city, rent, and bedroom conflicts excluded", async () => {
+  const result = await run([{ ...matching, isListing: false, units: [
+    { ...matchingUnit, rent: 700 }, { ...matchingUnit, rent: 2400 }, { ...matchingUnit, bedrooms: 2 }, matchingUnit,
+  ] }, { ...matching, isListing: null, city: "Ypsilanti" }]);
+  expect(result.listings).toHaveLength(1);
+  expect(result.listings[0]).toMatchObject({ ...matchingUnit, url: "https://example.com/0" });
+  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
+    url: "https://example.com/0", "rent out of range": 2, "bedrooms mismatch": 1,
+  }));
+  expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
+    url: "https://example.com/1", reason: "city conflict", value: "Ypsilanti",
+  }));
 });
 test("missing or invalid unit arrays do not invent a listing", async () => {
   const result = await run([undefined, null, {}, "not units", []].map(units => ({ ...matching, units })));
