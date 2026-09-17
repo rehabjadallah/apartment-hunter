@@ -45,13 +45,15 @@ export const run = internalAction({
     const search = await ctx.runQuery(internal.searches.get, { searchId });
     if (!search || search.status !== "searching") return;
     const p = search.preferences;
-    const counts = { urlsReturned: 0, urlsAfterDeduplication: 0, pagesWithContent: 0, listingsInserted: 0 };
+    const counts = { urlsReturned: 0, urlsAfterDeduplication: 0, urlsSelectedForScrape: 0, pagesWithContent: 0, listingsInserted: 0 };
     let error: string | undefined;
     try {
       const response = await firecrawl.search(ctx,
-        `Ann Arbor Michigan ${p.bedrooms === 0 ? "studio" : `${p.bedrooms} bedroom`} apartments floor plans rent ${p.pets === "none" ? "" : `${p.pets} friendly`}`,
+        `Named apartment communities in Ann Arbor Michigan with ${p.bedrooms === 0 ? "studio" : `${p.bedrooms} bedroom`} floor plan pages and leasing contacts ${p.pets === "none" ? "" : `${p.pets} friendly`}`,
         { limit: 8, location: "Ann Arbor, Michigan, United States", sources: ["web"],
-          excludeDomains: ["zillow.com", "apartments.com", "realtor.com", "redfin.com", "reddit.com"] });
+          excludeDomains: ["zillow.com", "apartments.com", "realtor.com", "redfin.com", "reddit.com",
+            "facebook.com", "yelp.com", "hometogo.com", "tripadvisor.com", "airbnb.com", "vrbo.com",
+            "pinterest.com", "homes.com", "trulia.com"] });
       counts.urlsReturned = (response.web ?? []).filter(item => typeof item.url === "string").length;
       const seen = new Set<string>();
       const uniqueUrls = (response.web ?? []).flatMap(item => {
@@ -65,6 +67,8 @@ export const run = internalAction({
       });
       counts.urlsAfterDeduplication = uniqueUrls.length;
       const urls = uniqueUrls.slice(0, 5);
+      counts.urlsSelectedForScrape = urls.length;
+      console.info("Firecrawl selected URLs", { searchId, urls });
       let scraped = 0;
       await Promise.all(urls.map(async url => {
         try {

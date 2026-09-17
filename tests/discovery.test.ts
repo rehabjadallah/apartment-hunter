@@ -30,6 +30,14 @@ async function run(documents: Array<Record<string, unknown> | Error>, urls = doc
 }
 const matching = { isListing: true, city: "Ann Arbor", title: "One bedroom", rent: 1500, bedrooms: 1, cats: true, parking: true, laundry: true, contactEmail: "leasing@example.com" };
 
+test("search excludes non-sources and directories while allowing RentCafe", async () => {
+  await run([matching]);
+  expect(mocks.search).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.objectContaining({
+    excludeDomains: ["zillow.com", "apartments.com", "realtor.com", "redfin.com", "reddit.com",
+      "facebook.com", "yelp.com", "hometogo.com", "tripadvisor.com", "airbnb.com", "vrbo.com",
+      "pinterest.com", "homes.com", "trulia.com"],
+  }));
+});
 test("excludes known conflicts and listings outside Ann Arbor", async () => {
   const result = await run([matching, { ...matching, rent: 2400 }, { ...matching, cats: false }, { ...matching, bedrooms: 2 }, { ...matching, city: "Ypsilanti" }]);
   expect(result.listings).toHaveLength(1);
@@ -54,17 +62,25 @@ test("stage counts distinguish duplicate URLs, empty pages, conflicts, and inser
   ]);
   expect(result.listings).toHaveLength(1);
   expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
-    urlsReturned: 5, urlsAfterDeduplication: 4, pagesWithContent: 2, listingsInserted: 1,
+    urlsReturned: 5, urlsAfterDeduplication: 4, urlsSelectedForScrape: 4, pagesWithContent: 2, listingsInserted: 1,
   }));
   expect(vi.mocked(console.info).mock.calls.filter(([message]) => message === "Firecrawl discovery counts")).toHaveLength(1);
   expect(console.info).toHaveBeenCalledWith("Firecrawl page", expect.objectContaining({ url: "https://example.com/0", statusCode: 200 }));
   expect(console.error).toHaveBeenCalledWith("Firecrawl page failed", expect.objectContaining({ url: "https://example.com/3", statusCode: "unknown" }), expect.any(Error));
 });
-test("deduplication counts URLs before the five-page scrape limit", async () => {
-  const result = await run(Array.from({ length: 7 }, () => matching));
+test("selected URLs are logged once before scraping and counted after deduplication and the five-page limit", async () => {
+  const result = await run(Array.from({ length: 7 }, () => matching), [
+    "https://example.com/0", "https://example.com/1", "https://example.com/1", "https://example.com/2",
+    "https://example.com/3", "https://example.com/4", "https://example.com/5", "https://example.com/6",
+  ]);
   expect(result.listings).toHaveLength(5);
+  const urls = ["https://example.com/0", "https://example.com/1", "https://example.com/2", "https://example.com/3", "https://example.com/4"];
+  expect(mocks.scrape.mock.calls.map(([, url]) => url)).toEqual(urls);
+  expect(console.info).toHaveBeenNthCalledWith(1, "Firecrawl selected URLs", expect.objectContaining({ urls }));
+  expect(vi.mocked(console.info).mock.calls.filter(([message]) => message === "Firecrawl selected URLs")).toHaveLength(1);
+  expect(vi.mocked(console.info).mock.invocationCallOrder[0]).toBeLessThan(mocks.scrape.mock.invocationCallOrder[0]);
   expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
-    urlsReturned: 7, urlsAfterDeduplication: 7, pagesWithContent: 5, listingsInserted: 5,
+    urlsReturned: 8, urlsAfterDeduplication: 7, urlsSelectedForScrape: 5, pagesWithContent: 5, listingsInserted: 5,
   }));
 });
 test("403 diagnostics distinguish policy refusals, confirmed challenges, and unknown causes", async () => {
@@ -91,7 +107,7 @@ test("all failed scrapes still finish with the existing user-facing error and ze
   const result = await run([new Error("Timed out")]);
   expect(result.search?.error).toBe("The listing sites could not be read. Please try again.");
   expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
-    urlsReturned: 1, urlsAfterDeduplication: 1, pagesWithContent: 0, listingsInserted: 0,
+    urlsReturned: 1, urlsAfterDeduplication: 1, urlsSelectedForScrape: 1, pagesWithContent: 0, listingsInserted: 0,
   }));
 });
 test("insert counts exclude writes skipped after a search times out", async () => {
@@ -99,7 +115,7 @@ test("insert counts exclude writes skipped after a search times out", async () =
   expect(result.listings).toHaveLength(0);
   expect(result.search?.status).toBe("failed");
   expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
-    urlsReturned: 1, urlsAfterDeduplication: 1, pagesWithContent: 1, listingsInserted: 0,
+    urlsReturned: 1, urlsAfterDeduplication: 1, urlsSelectedForScrape: 1, pagesWithContent: 1, listingsInserted: 0,
   }));
 });
 test("a search API failure logs zero counts and keeps the existing user-facing error", async () => {
@@ -107,6 +123,6 @@ test("a search API failure logs zero counts and keeps the existing user-facing e
   const result = await run([matching]);
   expect(result.search?.error).toBe("The listing search failed. Please try again shortly.");
   expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
-    urlsReturned: 0, urlsAfterDeduplication: 0, pagesWithContent: 0, listingsInserted: 0,
+    urlsReturned: 0, urlsAfterDeduplication: 0, urlsSelectedForScrape: 0, pagesWithContent: 0, listingsInserted: 0,
   }));
 });
