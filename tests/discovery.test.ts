@@ -39,6 +39,14 @@ test("search excludes non-sources and directories while allowing RentCafe", asyn
       "pinterest.com", "homes.com", "trulia.com"],
   }));
 });
+test("search describes floor plans without contact terms and extraction still requests the leasing contact", async () => {
+  await run([matching]);
+  expect(mocks.search).toHaveBeenCalledWith(expect.anything(), expect.stringContaining("Ann Arbor Michigan with 1 bedroom floor plan pages cat friendly"), expect.anything());
+  expect(mocks.search).toHaveBeenCalledWith(expect.anything(), expect.not.stringMatching(/contact/i), expect.anything());
+  expect(mocks.scrape).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.objectContaining({
+    formats: expect.arrayContaining([expect.objectContaining({ prompt: expect.stringContaining("contactEmail must be the leasing contact published on this page") })]),
+  }));
+});
 test("excludes known conflicts and listings outside Ann Arbor", async () => {
   const result = await run([matching, { ...matching, units: [{ ...matchingUnit, rent: 2400 }] }, { ...matching, cats: false },
     { ...matching, units: [{ ...matchingUnit, bedrooms: 2 }] }, { ...matching, city: "Ypsilanti" }]);
@@ -203,19 +211,19 @@ test("stage counts distinguish duplicate URLs, empty pages, conflicts, and inser
   expect(console.info).toHaveBeenCalledWith("Firecrawl page", expect.objectContaining({ url: "https://example.com/0", statusCode: 200 }));
   expect(console.error).toHaveBeenCalledWith("Firecrawl page failed", expect.objectContaining({ url: "https://example.com/3", statusCode: "unknown" }), expect.any(Error));
 });
-test("selected URLs are logged once before scraping and counted after deduplication and the five-page limit", async () => {
-  const result = await run(Array.from({ length: 7 }, () => matching), [
-    "https://example.com/0", "https://example.com/1", "https://example.com/1", "https://example.com/2",
-    "https://example.com/3", "https://example.com/4", "https://example.com/5", "https://example.com/6",
-  ]);
-  expect(result.listings).toHaveLength(5);
-  const urls = ["https://example.com/0", "https://example.com/1", "https://example.com/2", "https://example.com/3", "https://example.com/4"];
+test("search requests twenty results and logs the fifteen selected URLs after deduplication", async () => {
+  const returnedUrls = Array.from({ length: 19 }, (_, i) => `https://example.com/${i}`);
+  returnedUrls.splice(1, 0, "https://example.com/0");
+  const result = await run(Array.from({ length: 19 }, () => matching), returnedUrls);
+  expect(mocks.search).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.objectContaining({ limit: 20 }));
+  expect(result.listings).toHaveLength(15);
+  const urls = Array.from({ length: 15 }, (_, i) => `https://example.com/${i}`);
   expect(mocks.scrape.mock.calls.map(([, url]) => url)).toEqual(urls);
   expect(console.info).toHaveBeenNthCalledWith(1, "Firecrawl selected URLs", expect.objectContaining({ urls }));
   expect(vi.mocked(console.info).mock.calls.filter(([message]) => message === "Firecrawl selected URLs")).toHaveLength(1);
   expect(vi.mocked(console.info).mock.invocationCallOrder[0]).toBeLessThan(mocks.scrape.mock.invocationCallOrder[0]);
   expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
-    urlsReturned: 8, urlsAfterDeduplication: 7, urlsSelectedForScrape: 5, pagesWithContent: 5, listingsInserted: 5,
+    urlsReturned: 20, urlsAfterDeduplication: 19, urlsSelectedForScrape: 15, pagesWithContent: 15, listingsInserted: 15,
   }));
 });
 test("403 diagnostics distinguish policy refusals, confirmed challenges, and unknown causes", async () => {
@@ -230,6 +238,50 @@ test("403 diagnostics distinguish policy refusals, confirmed challenges, and unk
       url: `https://example.com/${index}`, statusCode: 403, reason,
     }), expect.any(Error));
   }
+});
+test("scrapes in batches of five and continues after a rate-limited page without retrying", async () => {
+  const finished: number[] = [];
+  const releases: Array<() => void> = [];
+  const limited = new ConvexError({ status: 429, message: "Rate limit exceeded" });
+  for (let i = 0; i < 12; i++) {
+    const ready = new Promise<void>(resolve => { releases.push(resolve); });
+    mocks.scrape.mockImplementationOnce(async () => {
+      await ready;
+      finished.push(i);
+      if (i === 4) throw limited;
+      return { json: matching, markdown: "leasing@example.com", metadata: { statusCode: 200 } };
+    });
+  }
+  const pending = run(Array.from({ length: 12 }, () => matching));
+  try {
+    for (const [start, end] of [[0, 5], [5, 10], [10, 12]]) {
+      await vi.waitFor(() => expect(mocks.scrape).toHaveBeenCalledTimes(end));
+      for (let i = start; i < end - 1; i++) releases[i]();
+      await vi.waitFor(() => expect(finished).toHaveLength(end - 1));
+      expect(mocks.scrape).toHaveBeenCalledTimes(end);
+      releases[end - 1]();
+    }
+  } finally {
+    releases.forEach(release => release());
+    await pending;
+  }
+  const result = await pending;
+  expect(result.listings).toHaveLength(11);
+  expect(result.search?.status).toBe("complete");
+  expect(mocks.scrape.mock.calls.map(([, url]) => url)).toEqual(Array.from({ length: 12 }, (_, i) => `https://example.com/${i}`));
+  expect(console.error).toHaveBeenCalledWith("Firecrawl page failed", expect.objectContaining({
+    url: "https://example.com/4", statusCode: 429, reason: "429 rate limited",
+  }), limited);
+  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
+    urlsSelectedForScrape: 12, pagesWithContent: 11, unitsExtracted: 11, unitsInserted: 11,
+  }));
+});
+test("a resolved 429 is logged as rate limited", async () => {
+  mocks.scrape.mockResolvedValueOnce({ metadata: { statusCode: 429 }, markdown: "Rate limit exceeded" });
+  await run([{}]);
+  expect(console.info).toHaveBeenCalledWith("Firecrawl page", expect.objectContaining({
+    url: "https://example.com/0", statusCode: 429, reason: "429 rate limited",
+  }));
 });
 test("a resolved 403 logs challenge evidence from page metadata", async () => {
   mocks.scrape.mockResolvedValueOnce({ metadata: { statusCode: 403, headers: { "cf-mitigated": "challenge" } }, markdown: "Challenge" });

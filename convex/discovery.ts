@@ -30,7 +30,8 @@ function scrapeDiagnostic(value: unknown) {
   const statusCode = typeof status === "number" ? status : Number(message.match(/failed \((\d{3})\)/)?.[1]) || "unknown";
   const headers = record(metadata?.headers) ?? record(data?.headers);
   const challenge = Object.entries(headers ?? {}).some(([key, value]) => key.toLowerCase() === "cf-mitigated" && value === "challenge");
-  const reason = statusCode !== 403 ? undefined : /we do not support this site/i.test(message) ? "Firecrawl policy refusal"
+  const reason = statusCode === 429 ? "429 rate limited" : statusCode !== 403 ? undefined
+    : /we do not support this site/i.test(message) ? "Firecrawl policy refusal"
     : challenge ? "Cloudflare challenge" : "Unclassified HTTP 403";
   return { statusCode, ...(reason ? { reason } : {}) };
 }
@@ -55,8 +56,8 @@ export const run = internalAction({
     let error: string | undefined;
     try {
       const response = await firecrawl.search(ctx,
-        `Named apartment communities in Ann Arbor Michigan with ${p.bedrooms === 0 ? "studio" : `${p.bedrooms} bedroom`} floor plan pages and leasing contacts ${p.pets === "none" ? "" : `${p.pets} friendly`}`,
-        { limit: 8, location: "Ann Arbor, Michigan, United States", sources: ["web"],
+        `Named apartment communities in Ann Arbor Michigan with ${p.bedrooms === 0 ? "studio" : `${p.bedrooms} bedroom`} floor plan pages ${p.pets === "none" ? "" : `${p.pets} friendly`}`,
+        { limit: 20, location: "Ann Arbor, Michigan, United States", sources: ["web"],
           excludeDomains: ["zillow.com", "apartments.com", "realtor.com", "redfin.com", "reddit.com",
             "facebook.com", "yelp.com", "hometogo.com", "tripadvisor.com", "airbnb.com", "vrbo.com",
             "pinterest.com", "homes.com", "trulia.com"] });
@@ -72,11 +73,11 @@ export const run = internalAction({
         } catch { return []; }
       });
       counts.urlsAfterDeduplication = uniqueUrls.length;
-      const urls = uniqueUrls.slice(0, 5);
+      const urls = uniqueUrls.slice(0, 15);
       counts.urlsSelectedForScrape = urls.length;
       console.info("Firecrawl selected URLs", { searchId, urls });
       let scraped = 0;
-      await Promise.all(urls.map(async url => {
+      const scrape = async (url: string) => {
         try {
           const page = await firecrawl.scrape(ctx, url, {
             formats: ["markdown", { type: "json", schema, prompt: "Extract every apartment floor plan offered for rent on this page into the units array, with one entry per floor plan. Include every published floor plan regardless of its rent or bedroom count. Each unit's title must be its published floor plan name; rent and bedrooms must describe that same plan. Do not invent a floor plan or infer one from search criteria. Return an empty units array when no floor plans are stated. Keep city, summary, contactEmail, cats, dogs, parking, and laundry at the property level. Property-specific floor-plan pages are listings; isListing must be false for general city-wide search directories, articles, or pages without a specific rental. Only use explicitly stated facts. city must be the property's actual city name without state or country. rent must be monthly USD for the same unit as bedrooms, not a deposit, per-person price, or price across unrelated units. laundry means in-unit laundry, not a shared laundry room. Use null for unknowns or ambiguous price ranges. contactEmail must be the leasing contact published on this page, never the website support address. Do not guess." }],
@@ -133,7 +134,10 @@ export const run = internalAction({
           // One inaccessible listing must not discard other results.
           console.error("Firecrawl page failed", { searchId, url, ...scrapeDiagnostic(error) }, error);
         }
-      }));
+      };
+      for (let i = 0; i < urls.length; i += 5) {
+        await Promise.all(urls.slice(i, i + 5).map(scrape));
+      }
       counts.listingsInserted = await ctx.runQuery(internal.discovery.listingCount, { searchId });
       counts.unitsInserted = counts.listingsInserted;
       error = urls.length > 0 && scraped === 0 ? "The listing sites could not be read. Please try again." : undefined;
