@@ -70,7 +70,8 @@ export const run = internalAction({
         try {
           const page = await firecrawl.scrape(ctx, url, {
             formats: ["markdown", { type: "json", schema, prompt: `Extract one specific apartment or floor plan offered for rent on this page. Prefer a ${p.bedrooms}-bedroom unit costing between ${p.minRent} and ${p.maxRent} USD monthly, if explicitly listed. Include its floor plan name in title. Property-specific floor-plan pages are listings; isListing must be false for general city-wide search directories, articles, or pages without a specific rental. Only use explicitly stated facts. city must be the property's actual city name without state or country. rent must be monthly USD for the same unit as bedrooms, not a deposit, per-person price, or price across unrelated units. laundry means in-unit laundry, not a shared laundry room. Use null for unknowns or ambiguous price ranges. contactEmail must be the leasing contact published on this page, never the website support address. Do not guess.` }],
-            onlyMainContent: true, timeout: 45000, maxAge: 3600000,
+            onlyMainContent: false, timeout: 45000, maxAge: 0,
+            proxy: "auto", waitFor: 3000,
           });
           scraped++;
           console.info("Firecrawl page", { searchId, url, ...scrapeDiagnostic(page) });
