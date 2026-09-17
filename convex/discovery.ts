@@ -5,17 +5,22 @@ import { internalAction, internalQuery } from "./_generated/server";
 
 const firecrawl = new FirecrawlClient(components.firecrawl);
 const nullable = (type: string) => ({ type: [type, "null"] });
+const unit = {
+  type: "object", properties: {
+    title: nullable("string"), rent: nullable("number"), bedrooms: nullable("number"),
+  },
+};
 const schema = {
   type: "object", properties: {
-    isListing: { type: "boolean" }, city: nullable("string"), title: nullable("string"),
-    summary: nullable("string"), rent: nullable("number"), bedrooms: nullable("number"),
+    isListing: { type: "boolean" }, city: nullable("string"), summary: nullable("string"),
     cats: nullable("boolean"), dogs: nullable("boolean"), parking: nullable("boolean"),
     laundry: nullable("boolean"), contactEmail: nullable("string"),
+    units: { type: "array", items: unit },
   },
 };
 
 const record = (value: unknown): Record<string, unknown> | undefined =>
-  value !== null && typeof value === "object" ? value as Record<string, unknown> : undefined;
+  value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
 function scrapeDiagnostic(value: unknown) {
   const outer = record(value); const data = record(outer?.data) ?? outer;
@@ -45,7 +50,8 @@ export const run = internalAction({
     const search = await ctx.runQuery(internal.searches.get, { searchId });
     if (!search || search.status !== "searching") return;
     const p = search.preferences;
-    const counts = { urlsReturned: 0, urlsAfterDeduplication: 0, urlsSelectedForScrape: 0, pagesWithContent: 0, listingsInserted: 0 };
+    const counts = { urlsReturned: 0, urlsAfterDeduplication: 0, urlsSelectedForScrape: 0,
+      pagesWithContent: 0, listingsInserted: 0, unitsExtracted: 0, unitsInserted: 0 };
     let error: string | undefined;
     try {
       const response = await firecrawl.search(ctx,
@@ -73,44 +79,58 @@ export const run = internalAction({
       await Promise.all(urls.map(async url => {
         try {
           const page = await firecrawl.scrape(ctx, url, {
-            formats: ["markdown", { type: "json", schema, prompt: `Extract one specific apartment or floor plan offered for rent on this page. Prefer a ${p.bedrooms}-bedroom unit costing between ${p.minRent} and ${p.maxRent} USD monthly, if explicitly listed. Include its floor plan name in title. Property-specific floor-plan pages are listings; isListing must be false for general city-wide search directories, articles, or pages without a specific rental. Only use explicitly stated facts. city must be the property's actual city name without state or country. rent must be monthly USD for the same unit as bedrooms, not a deposit, per-person price, or price across unrelated units. laundry means in-unit laundry, not a shared laundry room. Use null for unknowns or ambiguous price ranges. contactEmail must be the leasing contact published on this page, never the website support address. Do not guess.` }],
+            formats: ["markdown", { type: "json", schema, prompt: "Extract every apartment floor plan offered for rent on this page into the units array, with one entry per floor plan. Include every published floor plan regardless of its rent or bedroom count. Each unit's title must be its published floor plan name; rent and bedrooms must describe that same plan. Do not invent a floor plan or infer one from search criteria. Return an empty units array when no floor plans are stated. Keep city, summary, contactEmail, cats, dogs, parking, and laundry at the property level. Property-specific floor-plan pages are listings; isListing must be false for general city-wide search directories, articles, or pages without a specific rental. Only use explicitly stated facts. city must be the property's actual city name without state or country. rent must be monthly USD for the same unit as bedrooms, not a deposit, per-person price, or price across unrelated units. laundry means in-unit laundry, not a shared laundry room. Use null for unknowns or ambiguous price ranges. contactEmail must be the leasing contact published on this page, never the website support address. Do not guess." }],
             onlyMainContent: false, timeout: 45000, maxAge: 0,
             proxy: "auto", waitFor: 3000,
           });
           scraped++;
-          console.info("Firecrawl page", { searchId, url, ...scrapeDiagnostic(page) });
+          const d = record(page.json);
+          const units: unknown[] = Array.isArray(d?.units) ? d.units : [];
+          counts.unitsExtracted += units.length;
+          console.info("Firecrawl page", { searchId, url, ...scrapeDiagnostic(page),
+            isListing: d?.isListing ?? null, city: d?.city ?? null, unitsExtracted: units.length });
           if (page.markdown?.trim() || Object.keys(record(page.json) ?? {}).length > 0) counts.pagesWithContent++;
-          const d = page.json as Record<string, unknown> | undefined;
-          if (!d || d.isListing !== true || typeof d.city !== "string" || !/^ann arbor(?:,?\s+(?:mi|michigan))?$/i.test(d.city.trim())) return;
-          const rent = typeof d.rent === "number" && d.rent >= 0 ? d.rent : undefined;
-          const bedrooms = typeof d.bedrooms === "number" && d.bedrooms >= 0 ? d.bedrooms : undefined;
-          if (rent !== undefined && (rent < p.minRent || rent > p.maxRent)) return;
-          if (bedrooms !== undefined && bedrooms !== p.bedrooms) return;
-          if ((p.pets === "cat" && d.cats === false) || (p.pets === "dog" && d.dogs === false) || (p.parking && d.parking === false) || (p.laundry && d.laundry === false)) return;
-          const matches = ["Ann Arbor"];
-          const unknowns = ["Move-in availability and current pricing need confirmation"];
-          if (rent === undefined) unknowns.push("Rent not confirmed"); else matches.push("Within your rent range");
-          if (bedrooms === undefined) unknowns.push("Bedrooms not confirmed"); else matches.push(`${bedrooms === 0 ? "Studio" : `${bedrooms} bedrooms`}`);
-          for (const [needed, value, label] of [
-            [p.pets === "cat", d.cats, "Cats allowed"], [p.pets === "dog", d.dogs, "Dogs allowed"],
-            [p.parking, d.parking, "Parking"], [p.laundry, d.laundry, "In-unit laundry"],
-          ] as const) {
-            if (needed) (value === true ? matches : unknowns).push(value === true ? label : `${label}: not confirmed`);
+          if (!d || d.isListing !== true || typeof d.city !== "string" || !/^ann arbor(?:,?\s+(?:mi|michigan))?$/i.test(d.city.trim())) {
+            const reason = !d || d.isListing !== true ? "isListing false" : typeof d.city !== "string" ? "city null" : "city conflict";
+            console.info("Firecrawl page rejected", { searchId, url, reason, value: reason === "isListing false" ? d?.isListing ?? null : d?.city ?? null });
+            return;
           }
-          if (p.notes) unknowns.push("Additional preferences need confirmation");
+          if ((p.pets === "cat" && d.cats === false) || (p.pets === "dog" && d.dogs === false) || (p.parking && d.parking === false) || (p.laundry && d.laundry === false)) return;
           const email = typeof d.contactEmail === "string" ? d.contactEmail.trim() : "";
           const contactEmail = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email) && page.markdown?.toLowerCase().includes(email.toLowerCase()) ? email : undefined;
-          await ctx.runMutation(internal.searches.addListing, {
-            searchId, url, title: typeof d.title === "string" ? d.title.slice(0, 180) : "Ann Arbor apartment",
-            summary: typeof d.summary === "string" ? d.summary.slice(0, 600) : "View the original listing for details.",
-            rent, bedrooms, contactEmail, matches, unknowns,
-          });
+          const drops = { "rent out of range": 0, "bedrooms mismatch": 0 };
+          for (const value of units) {
+            const u = record(value);
+            if (!u) continue;
+            const rent = typeof u.rent === "number" && u.rent >= 0 ? u.rent : undefined;
+            const bedrooms = typeof u.bedrooms === "number" && u.bedrooms >= 0 ? u.bedrooms : undefined;
+            if (rent !== undefined && (rent < p.minRent || rent > p.maxRent)) { drops["rent out of range"]++; continue; }
+            if (bedrooms !== undefined && bedrooms !== p.bedrooms) { drops["bedrooms mismatch"]++; continue; }
+            const matches = ["Ann Arbor"];
+            const unknowns = ["Move-in availability and current pricing need confirmation"];
+            if (rent === undefined) unknowns.push("Rent not confirmed"); else matches.push("Within your rent range");
+            if (bedrooms === undefined) unknowns.push("Bedrooms not confirmed"); else matches.push(`${bedrooms === 0 ? "Studio" : `${bedrooms} bedrooms`}`);
+            for (const [needed, value, label] of [
+              [p.pets === "cat", d.cats, "Cats allowed"], [p.pets === "dog", d.dogs, "Dogs allowed"],
+              [p.parking, d.parking, "Parking"], [p.laundry, d.laundry, "In-unit laundry"],
+            ] as const) {
+              if (needed) (value === true ? matches : unknowns).push(value === true ? label : `${label}: not confirmed`);
+            }
+            if (p.notes) unknowns.push("Additional preferences need confirmation");
+            await ctx.runMutation(internal.searches.addListing, {
+              searchId, url, title: typeof u.title === "string" ? u.title.slice(0, 180) : "Ann Arbor apartment",
+              summary: typeof d.summary === "string" ? d.summary.slice(0, 600) : "View the original listing for details.",
+              rent, bedrooms, contactEmail, matches, unknowns,
+            });
+          }
+          console.info("Firecrawl unit drops", { searchId, url, ...drops });
         } catch (error) {
           // One inaccessible listing must not discard other results.
           console.error("Firecrawl page failed", { searchId, url, ...scrapeDiagnostic(error) }, error);
         }
       }));
       counts.listingsInserted = await ctx.runQuery(internal.discovery.listingCount, { searchId });
+      counts.unitsInserted = counts.listingsInserted;
       error = urls.length > 0 && scraped === 0 ? "The listing sites could not be read. Please try again." : undefined;
     } catch (cause) {
       console.error("Firecrawl discovery failed", { searchId }, cause);
