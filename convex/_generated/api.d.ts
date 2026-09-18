@@ -11,6 +11,7 @@
 import type * as auth from "../auth.js";
 import type * as discovery from "../discovery.js";
 import type * as health from "../health.js";
+import type * as http from "../http.js";
 import type * as inquiries from "../inquiries.js";
 import type * as migrations from "../migrations.js";
 import type * as searches from "../searches.js";
@@ -28,6 +29,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   discovery: typeof discovery;
   health: typeof health;
+  http: typeof http;
   inquiries: typeof inquiries;
   migrations: typeof migrations;
   searches: typeof searches;
@@ -68,4 +70,5 @@ export declare const components: {
   authUsername: import("@convex-dev/auth/username/_generated/component.js").ComponentApi<"authUsername">;
   agentmail: import("@agentmail/convex/_generated/component.js").ComponentApi<"agentmail">;
   firecrawl: import("@firecrawl/firecrawl-convex/_generated/component.js").ComponentApi<"firecrawl">;
+  staticHosting: import("@convex-dev/static-hosting/_generated/component.js").ComponentApi<"staticHosting">;
 };
