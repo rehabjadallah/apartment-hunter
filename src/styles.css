@@ -52,6 +52,18 @@ fieldset { padding: 0; border: 0; min-width: 0; display: grid; gap: 18px; }
 .checks label { display: flex; align-items: center; }
 .checks input { width: 17px; height: 17px; accent-color: #2d4937; }
 .field-caption { font-size: 13px; margin: 0; font-weight: 600; }
+.criterion { border-top: 1px solid #dce1d6; padding-top: 14px; gap: 12px; }
+.criterion legend { padding: 0 8px 0 0; font-size: 14px; font-weight: 600; }
+.value-toggles { display: flex; flex-wrap: wrap; gap: 8px; }
+.value-toggles button, .amenity-option > button { background: #fffefa; color: #263c30; border: 1px solid #7c8c74; padding: 9px 12px; }
+.value-toggles button[aria-pressed="true"], .amenity-option > button[aria-pressed="true"] { background: #2d4937; color: #fffefa; border-color: #2d4937; }
+.weight-control { gap: 0; }
+.weight-control [role="radiogroup"] { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.weight-control label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.weight-control input { width: 16px; height: 16px; margin: 0; accent-color: #2d4937; }
+.weight-control:disabled { color: #66715f; }
+.amenity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.amenity-option { display: grid; align-content: start; gap: 10px; }
 .muted, .fine-print { color: #66715f; line-height: 1.6; }
 .fine-print { font-size: 12px; }
 .error { background: #f8e9df; color: #8a3e24; border-radius: 8px; padding: 12px; font-size: 14px; line-height: 1.5; }
