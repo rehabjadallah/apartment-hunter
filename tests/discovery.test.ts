@@ -183,6 +183,86 @@ test("discovery does not require a bedroom when that criterion is unused", async
   }
 });
 
+test("a conflicting bedroom contributes negative points without dropping the unit", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, rent: null, bedrooms: 3 }] }], undefined, false,
+    { bedrooms: { values: [1, 2], weight: "must" }, pets: { values: [], weight: "nice" }, amenities: [] });
+  expect(result.listings).toHaveLength(1);
+  expect(result.listings[0]).toMatchObject({ score: -5, mustMisses: 1 });
+  expect(result.listings[0].unknowns).toContain("1 or 2 bedrooms: conflicts with must-have");
+});
+
+test("an unpublished floor is unconfirmed even when it is a must-have", async () => {
+  const result = await run([matching], undefined, false, { floors: { values: [1], weight: "must" } });
+  expect(result.listings[0]).toMatchObject({ score: 25, mustMisses: 0 });
+  expect(result.listings[0].unknowns).toContain("Floor not confirmed");
+});
+
+test.each([["want", 28], ["nice", 26], ["must", 30]] as const)("confirmed %s amenities add their weight", async (weight, score) => {
+  const result = await run([{ ...matching, dishwasher: true }], undefined, false, {
+    amenities: [{ key: "parking", weight: "must" }, { key: "laundry", weight: "must" }, { key: "dishwasher", weight }],
+  });
+  expect(result.listings[0]).toMatchObject({ score, mustMisses: 0 });
+  expect(result.listings[0].matches).toContain("Dishwasher");
+});
+
+test.each(["parking", "laundry", "dishwasher", "airConditioning", "balcony", "gym", "pool", "elevator", "furnished"] as const)(
+  "an explicitly absent %s amenity subtracts points", async key => {
+    const result = await run([{ ...matching, [key]: false }], undefined, false, { amenities: [{ key, weight: "want" }] });
+    expect(result.listings[0]).toMatchObject({ score: 12, mustMisses: 0 });
+    expect(result.listings[0].unknowns.some(line => line.endsWith(": conflicts with preference"))).toBe(true);
+  });
+
+test("third-or-higher floors and two-or-more bathrooms match higher published values", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, floor: 5, bathrooms: 2.5 }] }], undefined, false,
+    { floors: { values: [3], weight: "must" }, bathrooms: { values: [2], weight: "want" } });
+  expect(result.listings[0]).toMatchObject({ score: 33, mustMisses: 0 });
+  expect(result.listings[0].matches).toEqual(expect.arrayContaining(["Floor 5", "2.5 bathrooms"]));
+});
+
+test("two plans with different square footage retain independent scores", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, sqft: 1000 }, { ...matchingUnit, sqft: 500 }] }], undefined, false,
+    { sqft: { min: 700, max: 1100, weight: "must" } });
+  expect(result.listings.map(listing => [listing.score, listing.mustMisses])).toEqual([[30, 0], [20, 1]]);
+});
+
+test.each([{ min: 700 }, { max: 1100 }])("square footage supports a single bound (%j)", async bounds => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, sqft: 900 }] }], undefined, false, { sqft: { ...bounds, weight: "nice" } });
+  expect(result.listings[0]).toMatchObject({ score: 26, mustMisses: 0 });
+});
+
+test.each([
+  { terms: [6, 12], score: 28, misses: 0 }, { terms: [9], score: 22, misses: 0 },
+  { terms: [], score: 25, misses: 0 }, { terms: null, score: 25, misses: 0 },
+])("lease terms match any selected term and missing terms remain unknown (%j)", async ({ terms, score, misses }) => {
+  const result = await run([{ ...matching, leaseMonths: terms }], undefined, false, { leaseMonths: { values: [1, 12], weight: "want" } });
+  expect(result.listings[0]).toMatchObject({ score, mustMisses: misses });
+});
+
+test.each([
+  { cats: true, dogs: true, score: 25, misses: 0 },
+  { cats: true, dogs: null, score: 20, misses: 0 },
+  { cats: false, dogs: null, score: 15, misses: 1 },
+  { cats: false, dogs: false, score: 15, misses: 1 },
+])("pets count as one criterion requiring every selected animal (%j)", async ({ cats, dogs, score, misses }) => {
+  const result = await run([{ ...matching, cats, dogs }], undefined, false, { pets: { values: ["cat", "dog"], weight: "must" } });
+  expect(result.listings[0]).toMatchObject({ score, mustMisses: misses });
+});
+
+test("unused criteria add no lines or points even when published facts differ", async () => {
+  const result = await run([{ ...matching, cats: false, parking: false, laundry: false, leaseMonths: [9],
+    units: [{ ...matchingUnit, bedrooms: 5, floor: 8, bathrooms: 3, sqft: 400 }] }], undefined, false,
+    { bedrooms: { values: [], weight: "must" }, pets: { values: [], weight: "must" }, amenities: [] });
+  expect(result.listings[0]).toMatchObject({ score: 5, mustMisses: 0,
+    matches: ["Ann Arbor", "Within your rent range"], unknowns: ["Move-in availability and current pricing need confirmation"] });
+});
+
+test("invalid numeric extractions remain unknown instead of conflicting", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, rent: Infinity, bedrooms: NaN, bathrooms: Infinity, floor: 0, sqft: -1 }] }], undefined, false,
+    { bathrooms: { values: [1], weight: "must" }, floors: { values: [1], weight: "must" }, sqft: { min: 500, weight: "must" } });
+  expect(result.listings[0]).toMatchObject({ score: 15, mustMisses: 0 });
+  expect(result.listings[0].unknowns).toEqual(expect.arrayContaining(["Rent not confirmed", "Bedrooms not confirmed", "Bathrooms not confirmed", "Floor not confirmed", "Square footage not confirmed"]));
+});
+
 test.each([
   { bedrooms: { values: [-1], weight: "must" } }, { bedrooms: { values: [7], weight: "must" } },
   { bedrooms: { values: [1.5], weight: "must" } }, { bedrooms: { values: [NaN], weight: "must" } },
@@ -234,13 +314,14 @@ test("search describes floor plans without contact terms and extraction still re
     formats: expect.arrayContaining([expect.objectContaining({ prompt: expect.stringContaining("contactEmail must be the leasing contact published on this page") })]),
   }));
 });
-test("excludes known conflicts and listings outside Ann Arbor", async () => {
+test("keeps preference conflicts but excludes listings outside Ann Arbor", async () => {
   const result = await run([matching, { ...matching, units: [{ ...matchingUnit, rent: 2400 }] }, { ...matching, cats: false },
     { ...matching, units: [{ ...matchingUnit, bedrooms: 2 }] }, { ...matching, city: "Ypsilanti" }]);
-  expect(result.listings).toHaveLength(1);
-  expect(result.listings[0].matches).toContain("Within your rent range");
+  expect(result.listings).toHaveLength(4);
+  expect(result.listings.map(listing => [listing.score, listing.mustMisses])).toEqual([[25, 0], [15, 1], [15, 1], [15, 1]]);
   expect(result.search?.status).toBe("complete");
 });
+
 test("unknown facts are unconfirmed and ungrounded email addresses are discarded", async () => {
   const result = await run([{ ...matching, units: [{ ...matchingUnit, rent: null }], cats: null, contactEmail: "invented@example.com" }]);
   expect(result.listings[0].unknowns).toContain("Rent not confirmed");
@@ -264,45 +345,44 @@ test("a page with five units inserts five listings with shared property facts", 
     pagesWithContent: 1, listingsInserted: 5, unitsExtracted: 5, unitsInserted: 5,
   }));
 });
-test("a page with five units inserts two when three rents exceed the budget", async () => {
+test("a page with five units keeps all five when three rents exceed the budget", async () => {
   const units = [2100, 1000, 2400, 3000, 2000].map((rent, i) => ({ ...matchingUnit, title: `Plan ${i + 1}`, rent }));
   const result = await run([{ ...matching, units }]);
-  expect(result.listings.map(({ title, rent }) => ({ title, rent }))).toEqual([
-    { title: "Plan 2", rent: 1000 }, { title: "Plan 5", rent: 2000 },
-  ]);
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/0", "rent out of range": 3, "bedrooms mismatch": 0,
+  expect(result.listings.map(({ title, rent, bedrooms }) => ({ title, rent, bedrooms }))).toEqual(units);
+  expect(result.listings.map(listing => listing.mustMisses)).toEqual([1, 0, 1, 1, 0]);
+  expect(console.info).toHaveBeenCalledWith("Firecrawl units scored", expect.objectContaining({
+    url: "https://example.com/0", units: 5, withMustMisses: 3,
   }));
-  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 5, unitsInserted: 2 }));
+  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 5, unitsInserted: 5 }));
 });
-test("unit conflicts do not discard other units and each listing has its own unknowns", async () => {
+
+test("unit conflicts keep every unit with independent scores and unknowns", async () => {
   const result = await run([{ ...matching, units: [
     { ...matchingUnit, rent: 700 }, { ...matchingUnit, bedrooms: 2 },
     { title: "Unconfirmed", rent: null, bedrooms: null }, matchingUnit,
   ] }]);
-  expect(result.listings).toHaveLength(2);
-  expect(result.listings[0]).toMatchObject({ title: "Unconfirmed", unknowns: [
+  expect(result.listings.map(listing => [listing.score, listing.mustMisses])).toEqual([[15, 1], [15, 1], [15, 0], [25, 0]]);
+  expect(result.listings[2]).toMatchObject({ title: "Unconfirmed", unknowns: [
     "Move-in availability and current pricing need confirmation", "Rent not confirmed", "Bedrooms not confirmed",
   ] });
-  expect(result.listings[0].rent).toBeUndefined();
-  expect(result.listings[0].bedrooms).toBeUndefined();
-  expect(result.listings[0].matches).not.toContain("Within your rent range");
-  expect(result.listings[0].matches).not.toContain("1 bedrooms");
-  expect(result.listings[1].unknowns).toEqual(["Move-in availability and current pricing need confirmation"]);
-  expect(result.listings[1].matches).toContain("Within your rent range");
-  expect(result.listings[1].matches).toContain("1 bedrooms");
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/0", "rent out of range": 1, "bedrooms mismatch": 1,
+  expect(result.listings[2].rent).toBeUndefined();
+  expect(result.listings[2].bedrooms).toBeUndefined();
+  expect(result.listings[2].matches).not.toContain("Within your rent range");
+  expect(result.listings[2].matches).not.toContain("1 bedrooms");
+  expect(result.listings[3].unknowns).toEqual(["Move-in availability and current pricing need confirmation"]);
+  expect(console.info).toHaveBeenCalledWith("Firecrawl units scored", expect.objectContaining({
+    url: "https://example.com/0", units: 4, withMustMisses: 2,
   }));
 });
-test("logs distinguish rejected pages, empty unit arrays, and fully filtered units", async () => {
+
+test("logs distinguish rejected pages, empty unit arrays, and scored units", async () => {
   const result = await run([
     { ...matching, isListing: false, units: [] }, { ...matching, city: null, units: [] }, { ...matching, city: "Ypsilanti" },
     { ...matching, units: [] }, { ...matching, units: [
       { ...matchingUnit, rent: 2400, bedrooms: 2 }, { ...matchingUnit, bedrooms: 2 },
     ] },
   ]);
-  expect(result.listings).toHaveLength(0);
+  expect(result.listings).toHaveLength(2);
   expect(result.search?.status).toBe("complete");
   for (const [index, reason, value] of [[0, "units empty", 0], [1, "units empty", 0], [2, "city conflict", "Ypsilanti"]] as const) {
     expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
@@ -315,16 +395,18 @@ test("logs distinguish rejected pages, empty unit arrays, and fully filtered uni
   expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
     url: "https://example.com/3", reason: "units empty", value: 0,
   }));
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/4", "rent out of range": 1, "bedrooms mismatch": 1,
+  expect(console.info).toHaveBeenCalledWith("Firecrawl units scored", expect.objectContaining({
+    url: "https://example.com/4", units: 2, withMustMisses: 2,
   }));
-  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 3, unitsInserted: 0 }));
+  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 3, unitsInserted: 2 }));
 });
-test("page conflicts exclude every unit", async () => {
+test("page preference conflicts keep every unit while city conflicts still drop", async () => {
   const page = { ...matching, units: [matchingUnit, { ...matchingUnit, title: "Another plan" }] };
   const result = await run([{ ...page, cats: false }, { ...page, parking: false }, { ...page, laundry: false }, { ...page, city: "Ypsilanti" }]);
-  expect(result.listings).toHaveLength(0);
+  expect(result.listings).toHaveLength(6);
+  expect(result.listings.every(listing => listing.score === 15 && listing.mustMisses === 1)).toBe(true);
 });
+
 test("pages with floor plans are kept when isListing is false or null", async () => {
   const result = await run([3, 7, 24].map((count, i) => ({ ...matching, isListing: i === 1 ? null : false,
     units: Array.from({ length: count }, (_, j) => ({ ...matchingUnit, title: `Property ${i} plan ${j}` })),
@@ -357,19 +439,18 @@ test("Ann Arbor and Ann Arbor Charter Township accept case, whitespace, and stat
     expect(listing.unknowns).not.toContain("City not confirmed");
   }
 });
-test("overriding isListing keeps city, rent, and bedroom conflicts excluded", async () => {
+test("overriding isListing keeps rent and bedroom conflicts but excludes another city", async () => {
   const result = await run([{ ...matching, isListing: false, units: [
     { ...matchingUnit, rent: 700 }, { ...matchingUnit, rent: 2400 }, { ...matchingUnit, bedrooms: 2 }, matchingUnit,
   ] }, { ...matching, isListing: null, city: "Ypsilanti" }]);
-  expect(result.listings).toHaveLength(1);
-  expect(result.listings[0]).toMatchObject({ ...matchingUnit, url: "https://example.com/0" });
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/0", "rent out of range": 2, "bedrooms mismatch": 1,
-  }));
+  expect(result.listings).toHaveLength(4);
+  expect(result.listings.map(listing => listing.mustMisses)).toEqual([1, 1, 1, 0]);
+  expect(console.info).toHaveBeenCalledWith("Firecrawl units scored", expect.objectContaining({ url: "https://example.com/0", units: 4, withMustMisses: 3 }));
   expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
     url: "https://example.com/1", reason: "city conflict", value: "Ypsilanti",
   }));
 });
+
 test("missing or invalid unit arrays do not invent a listing", async () => {
   const result = await run([undefined, null, {}, "not units", []].map(units => ({ ...matching, units })));
   expect(result.listings).toHaveLength(0);
@@ -390,9 +471,9 @@ test("stage counts distinguish duplicate URLs, empty pages, conflicts, and inser
   const result = await run([{}, matching, { ...matching, units: [{ ...matchingUnit, rent: 2400 }] }, new Error("Timed out")], [
     "https://example.com/0", "https://example.com/1", "https://example.com/1", "https://example.com/2", "https://example.com/3",
   ]);
-  expect(result.listings).toHaveLength(1);
+  expect(result.listings).toHaveLength(2);
   expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
-    urlsReturned: 5, urlsAfterDeduplication: 4, urlsSelectedForScrape: 4, pagesWithContent: 2, listingsInserted: 1, unitsExtracted: 2, unitsInserted: 1,
+    urlsReturned: 5, urlsAfterDeduplication: 4, urlsSelectedForScrape: 4, pagesWithContent: 2, listingsInserted: 2, unitsExtracted: 2, unitsInserted: 2,
   }));
   expect(vi.mocked(console.info).mock.calls.filter(([message]) => message === "Firecrawl discovery counts")).toHaveLength(1);
   expect(console.info).toHaveBeenCalledWith("Firecrawl page", expect.objectContaining({ url: "https://example.com/0", statusCode: 200 }));

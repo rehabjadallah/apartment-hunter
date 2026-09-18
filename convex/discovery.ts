@@ -2,6 +2,7 @@ import { FirecrawlClient } from "@firecrawl/firecrawl-convex";
 import { v } from "convex/values";
 import { components, internal } from "./_generated/api";
 import { internalAction, internalQuery } from "./_generated/server";
+import type { Preferences } from "./schema";
 
 const firecrawl = new FirecrawlClient(components.firecrawl);
 const nullable = (type: string) => ({ type: [type, "null"] });
@@ -27,6 +28,65 @@ const schema = {
 const record = (value: unknown): Record<string, unknown> | undefined =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 
+const nonnegative = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+const amenityLabels = { parking: "Parking", laundry: "In-unit laundry", dishwasher: "Dishwasher", airConditioning: "Air conditioning",
+  balcony: "Balcony", gym: "Gym", pool: "Pool", elevator: "Elevator", furnished: "Furnished" };
+
+function scoreUnit(p: Preferences, u: Record<string, unknown>, d: Record<string, unknown>, city: string | undefined) {
+  const rent = nonnegative(u.rent);
+  const rawBedrooms = nonnegative(u.bedrooms); const bedrooms = Number.isInteger(rawBedrooms) ? rawBedrooms : undefined;
+  const bathrooms = nonnegative(u.bathrooms); const sqft = nonnegative(u.sqft);
+  const rawFloor = nonnegative(u.floor); const floor = rawFloor !== undefined && rawFloor >= 1 && Number.isInteger(rawFloor) ? rawFloor : undefined;
+  const matches = city === undefined ? [] : ["Ann Arbor"];
+  const unknowns = ["Move-in availability and current pricing need confirmation"];
+  if (city === undefined) unknowns.push("City not confirmed");
+  let score = 0; let mustMisses = 0;
+  const points = { must: 5, want: 3, nice: 1 };
+  const evaluate = (weight: Preferences["bedrooms"]["weight"], outcome: boolean | undefined, label: string,
+    unconfirmed: string, confirmed: string[] = [label]) => {
+    if (outcome === undefined) { unknowns.push(unconfirmed); return; }
+    score += outcome ? points[weight] : -points[weight];
+    if (outcome) matches.push(...confirmed);
+    else {
+      if (weight === "must") mustMisses++;
+      unknowns.push(`${label}: conflicts with ${weight === "must" ? "must-have" : "preference"}`);
+    }
+  };
+  evaluate("must", rent === undefined ? undefined : rent >= p.minRent && rent <= p.maxRent,
+    "Rent range", "Rent not confirmed", ["Within your rent range"]);
+  if (p.bedrooms.values.length) evaluate(p.bedrooms.weight, bedrooms === undefined ? undefined : p.bedrooms.values.includes(bedrooms),
+    p.bedrooms.values.length === 1 && p.bedrooms.values[0] === 0 ? "Studio" : `${p.bedrooms.values.map(value => value === 0 ? "studio" : value).join(" or ")} bedrooms`,
+    "Bedrooms not confirmed", [bedrooms === 0 ? "Studio" : `${bedrooms} bedrooms`]);
+  if (p.bathrooms.values.length) evaluate(p.bathrooms.weight,
+    bathrooms === undefined ? undefined : p.bathrooms.values.some(value => value === 2 ? bathrooms >= 2 : bathrooms === value),
+    `${p.bathrooms.values.map(value => value === 2 ? "2+" : value).join(" or ")} bathrooms`, "Bathrooms not confirmed", [`${bathrooms} bathrooms`]);
+  if (p.sqft.min !== undefined || p.sqft.max !== undefined) evaluate(p.sqft.weight,
+    sqft === undefined ? undefined : (p.sqft.min === undefined || sqft >= p.sqft.min) && (p.sqft.max === undefined || sqft <= p.sqft.max),
+    "Square footage", "Square footage not confirmed", [`${sqft} sq ft`]);
+  if (p.floors.values.length) evaluate(p.floors.weight,
+    floor === undefined ? undefined : p.floors.values.some(value => value === 3 ? floor >= 3 : floor === value),
+    `Floor ${p.floors.values.map(value => value === 3 ? "3 or higher" : value).join(" or ")}`, "Floor not confirmed", [`Floor ${floor}`]);
+  if (p.pets.values.length) {
+    const facts = p.pets.values.map(pet => d[pet === "cat" ? "cats" : "dogs"]);
+    const labels = p.pets.values.map(pet => pet === "cat" ? "Cats allowed" : "Dogs allowed");
+    const outcome = facts.some(value => value === false) ? false : facts.every(value => value === true) ? true : undefined;
+    evaluate(p.pets.weight, outcome, labels.join(" and "), `${labels.join(" and ")}: not confirmed`, labels);
+  }
+  if (p.leaseMonths.values.length) {
+    const terms = Array.isArray(d.leaseMonths) ? d.leaseMonths.filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value > 0) : [];
+    const accepted = terms.filter(value => p.leaseMonths.values.includes(value));
+    evaluate(p.leaseMonths.weight, terms.length ? accepted.length > 0 : undefined,
+      `${p.leaseMonths.values.map(value => value === 1 ? "month-to-month" : `${value}-month`).join(" or ")} lease`,
+      "Lease length not confirmed", [`${accepted.join(" or ")} month lease`]);
+  }
+  for (const amenity of p.amenities) {
+    const value = d[amenity.key]; const label = amenityLabels[amenity.key];
+    evaluate(amenity.weight, typeof value === "boolean" ? value : undefined, label, `${label}: not confirmed`);
+  }
+  if (p.notes) unknowns.push("Additional preferences need confirmation");
+  return { rent, bedrooms, matches, unknowns, score, mustMisses };
+}
+
 function scrapeDiagnostic(value: unknown) {
   const outer = record(value); const data = record(outer?.data) ?? outer;
   const metadata = record(data?.metadata);
@@ -51,14 +111,14 @@ export const listingCount = internalQuery({
 });
 
 export const run = internalAction({
-  args: { searchId: v.id("searches") },
+  args: { searchId: v.id("searches") }, returns: v.null(),
   handler: async (ctx, { searchId }) => {
     const search = await ctx.runQuery(internal.searches.get, { searchId });
-    if (!search || search.status !== "searching") return;
+    if (!search || search.status !== "searching") return null;
     const p = search.preferences;
     const queryBedrooms = p.bedrooms.values[0] ?? 1; const queryPet = p.pets.values.length ? p.pets.values[0] : "none";
     const counts = { urlsReturned: 0, urlsAfterDeduplication: 0, urlsSelectedForScrape: 0,
-      pagesWithContent: 0, listingsInserted: 0, unitsExtracted: 0, unitsInserted: 0 };
+      pagesWithContent: 0, listingsInserted: 0, unitsExtracted: 0, unitsInserted: 0, unitsScored: 0, unitsWithMustMisses: 0 };
     let error: string | undefined;
     try {
       const response = await firecrawl.search(ctx,
@@ -106,39 +166,22 @@ export const run = internalAction({
             console.info("Firecrawl page rejected", { searchId, url, reason: "city conflict", value: d.city });
             return;
           }
-          if ((p.pets.values.includes("cat") && d.cats === false) || (p.pets.values.includes("dog") && d.dogs === false) ||
-            (p.amenities.some(item => item.key === "parking") && d.parking === false) || (p.amenities.some(item => item.key === "laundry") && d.laundry === false)) return;
           const email = typeof d.contactEmail === "string" ? d.contactEmail.trim() : "";
           const contactEmail = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email) && page.markdown?.toLowerCase().includes(email.toLowerCase()) ? email : undefined;
-          const drops = { "rent out of range": 0, "bedrooms mismatch": 0 };
+          const scored = { units: 0, withMustMisses: 0 };
           for (const value of units) {
             const u = record(value);
             if (!u) continue;
-            const rent = typeof u.rent === "number" && u.rent >= 0 ? u.rent : undefined;
-            const bedrooms = typeof u.bedrooms === "number" && u.bedrooms >= 0 ? u.bedrooms : undefined;
-            if (rent !== undefined && (rent < p.minRent || rent > p.maxRent)) { drops["rent out of range"]++; continue; }
-            if (bedrooms !== undefined && p.bedrooms.values.length && !p.bedrooms.values.includes(bedrooms)) { drops["bedrooms mismatch"]++; continue; }
-            const matches = city === undefined ? [] : ["Ann Arbor"];
-            const unknowns = ["Move-in availability and current pricing need confirmation"];
-            if (city === undefined) unknowns.push("City not confirmed");
-            if (rent === undefined) unknowns.push("Rent not confirmed"); else matches.push("Within your rent range");
-            if (p.bedrooms.values.length) {
-              if (bedrooms === undefined) unknowns.push("Bedrooms not confirmed"); else matches.push(`${bedrooms === 0 ? "Studio" : `${bedrooms} bedrooms`}`);
-            }
-            for (const [needed, value, label] of [
-              [p.pets.values.includes("cat"), d.cats, "Cats allowed"], [p.pets.values.includes("dog"), d.dogs, "Dogs allowed"],
-              [p.amenities.some(item => item.key === "parking"), d.parking, "Parking"], [p.amenities.some(item => item.key === "laundry"), d.laundry, "In-unit laundry"],
-            ] as const) {
-              if (needed) (value === true ? matches : unknowns).push(value === true ? label : `${label}: not confirmed`);
-            }
-            if (p.notes) unknowns.push("Additional preferences need confirmation");
+            const result = scoreUnit(p, u, d, city);
+            scored.units++; counts.unitsScored++;
+            if (result.mustMisses > 0) { scored.withMustMisses++; counts.unitsWithMustMisses++; }
             await ctx.runMutation(internal.searches.addListing, {
               searchId, url, title: typeof u.title === "string" ? u.title.slice(0, 180) : "Ann Arbor apartment",
               summary: typeof d.summary === "string" ? d.summary.slice(0, 600) : "View the original listing for details.",
-              rent, bedrooms, contactEmail, matches, unknowns,
+              ...result, contactEmail,
             });
           }
-          console.info("Firecrawl unit drops", { searchId, url, ...drops });
+          console.info("Firecrawl units scored", { searchId, url, ...scored });
         } catch (error) {
           // One inaccessible listing must not discard other results.
           console.error("Firecrawl page failed", { searchId, url, ...scrapeDiagnostic(error) }, error);
@@ -156,5 +199,6 @@ export const run = internalAction({
     }
     console.info("Firecrawl discovery counts", { searchId, ...counts });
     await ctx.runMutation(internal.searches.finish, { searchId, error });
+    return null;
   },
 });

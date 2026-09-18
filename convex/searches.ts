@@ -69,13 +69,13 @@ export const addListing = internalMutation({
   args: {
     searchId: v.id("searches"), title: v.string(), url: v.string(), summary: v.string(),
     rent: v.optional(v.number()), bedrooms: v.optional(v.number()), contactEmail: v.optional(v.string()),
-    matches: v.array(v.string()), unknowns: v.array(v.string()),
+    matches: v.array(v.string()), unknowns: v.array(v.string()), score: v.number(), mustMisses: v.number(),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
     const search = await ctx.db.get(args.searchId);
     if (search?.status === "searching") await ctx.db.insert("listings", {
-      ...args, ...recordedListingScore(search.preferences, args), checkedAt: Date.now(),
+      ...args, checkedAt: Date.now(),
     });
     return null;
   },
