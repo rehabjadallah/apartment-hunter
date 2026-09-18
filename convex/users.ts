@@ -1,6 +1,6 @@
 import { getAuthUserId } from "@convex-dev/auth/core";
 import { ConvexError, v } from "convex/values";
-import { internalMutation, query, type QueryCtx, type MutationCtx } from "./_generated/server";
+import { internalMutation, mutation, query, type QueryCtx, type MutationCtx } from "./_generated/server";
 import { components } from "./_generated/api";
 
 export async function requireUser(ctx: QueryCtx | MutationCtx) {
@@ -21,6 +21,16 @@ export const current = query({
   handler: async (ctx) => {
     const user = await requireUser(ctx);
     const username = await ctx.runQuery(components.authUsername.public.getUsername, { userId: user._id });
-    return { username, preferences: user.preferences };
+    return { username, name: user.name, preferences: user.preferences };
+  },
+});
+
+export const saveName = mutation({
+  args: { name: v.string() },
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    const name = args.name.trim();
+    if (!name || name.length > 100) throw new ConvexError("Please enter a name between 1 and 100 characters.");
+    await ctx.db.patch("users", user._id, { name });
   },
 });

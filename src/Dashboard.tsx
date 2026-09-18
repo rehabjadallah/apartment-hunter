@@ -7,6 +7,7 @@ import type { Doc, Id } from "../convex/_generated/dataModel";
 import Preferences from "./Preferences";
 import Modal from "./Modal";
 import PasswordSettings from "./PasswordSettings";
+import NamePrompt from "./NamePrompt";
 
 const money = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 
@@ -22,8 +23,9 @@ export default function Dashboard() {
   const searchId = selected ?? searches?.[0]?._id;
   if (!user || !searches) return <p role="status" className="empty">Loading your searches…</p>;
   return <>
-    <div className="account-bar"><span>Hello, {user.username}</span><div><button className="text-button" onClick={() => setSettings(true)}>Account</button><button className="text-button" onClick={() => { void signOut().catch(() => setError("Unable to sign out. Please try again.")); }}>Sign out</button></div></div>
+    <div className="account-bar"><span>{user.name ? `Hello, ${user.name}` : "Welcome!"}</span><div><button className="text-button" onClick={() => setSettings(true)}>Account</button><button className="text-button" onClick={() => { void signOut().catch(() => setError("Unable to sign out. Please try again.")); }}>Sign out</button></div></div>
     {error && <p role="alert" className="error">{error}</p>}
+    {!user.name ? <NamePrompt /> : <>
     <section className="dashboard-heading"><div><p className="eyebrow">Ann Arbor, Michigan</p><h1>Find your <span>next chapter.</span></h1><p className="muted">Your preferences. Your shortlist. Your conversations.</p></div><button onClick={() => setEditing(true)}>New apartment search</button></section>
     <nav className="tabs" aria-label="Your apartment search"><button aria-current={tab === "search" ? "page" : undefined} onClick={() => setTab("search")}>Apartments</button><button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => setTab("inbox")}>Conversations</button></nav>
     {tab === "search" ? <>
@@ -31,6 +33,7 @@ export default function Dashboard() {
       {searchId ? <Results key={searchId} searchId={searchId} onSent={() => setTab("inbox")} /> : <section className="empty panel"><h2>A place that fits your life.</h2><p>Start with your budget and must-haves. We'll look for apartments in Ann Arbor.</p><button onClick={() => setEditing(true)}>Set my preferences</button></section>}
     </> : <Conversations />}
     {(editing ?? (!user.preferences && !settings)) && <Preferences initial={user.preferences} onClose={() => setEditing(false)} onSearch={id => { setSelected(id); setEditing(false); setTab("search"); }} />}
+    </>}
     {settings && <PasswordSettings username={user.username ?? ""} onClose={() => setSettings(false)} />}
   </>;
 }
@@ -49,8 +52,12 @@ function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent: () =>
       <h2>{listing.title}</h2><p className="price">{listing.rent === undefined ? "Ask about pricing" : <>{money(listing.rent)} <small>/ month</small></>}</p>
       <p>{listing.summary}</p><div className="match-tags">{listing.matches.map(m => <span key={m}>{m}</span>)}</div>
       <details><summary>Details to confirm ({listing.unknowns.length})</summary><ul>{listing.unknowns.map(u => <li key={u}>{u}</li>)}</ul></details>
-      <div className="listing-actions"><a href={listing.url} target="_blank" rel="noopener noreferrer">View listing ↗</a><button disabled={!listing.contactEmail} onClick={() => setContact(listing)}>Follow up</button></div>
-      {!listing.contactEmail && <p className="fine-print">No email contact found. Use the listing's contact form.</p>}
+      <div className="listing-actions"><a href={listing.url} target="_blank" rel="noopener noreferrer">View listing ↗</a>
+        <span className="follow-up" tabIndex={!listing.contactEmail ? 0 : undefined} aria-describedby={!listing.contactEmail ? `contact-tooltip-${listing._id}` : undefined}>
+          <button disabled={!listing.contactEmail} onClick={() => setContact(listing)}>Follow up</button>
+          {!listing.contactEmail && <span role="tooltip" id={`contact-tooltip-${listing._id}`} className="contact-tooltip">No email contact found. Use the listing's contact form.</span>}
+        </span>
+      </div>
     </article>)}</div>
     {contact && <InquiryForm listing={contact} preferences={results.preferences} onClose={() => setContact(null)} onSent={() => { setContact(null); onSent(); }} />}
   </>;
