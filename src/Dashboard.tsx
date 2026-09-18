@@ -67,7 +67,7 @@ export function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent
       <h3>{listing.title}</h3>
       {listing.complexName && <p className="complex-name">{listing.complexName}</p>}
       <div className="price-row"><p className="price">{listing.rent === undefined ? "Ask about pricing" : <>{money(listing.rent)} <small>/ month</small></>}</p>
-        <span className="preference-count">{preferenceCount(results.preferences, listing)}</span></div>
+    </div>
       <p>{listing.summary}</p><div className="match-tags">{listing.matches.map(m => <span key={m}>{m}</span>)}</div>
       <details><summary>Details to confirm ({listing.unknowns.length})</summary><ul>{listing.unknowns.map(u => <li key={u}>{u}</li>)}</ul></details>
       <div className="listing-actions"><a href={listing.url} target="_blank" rel="noopener noreferrer">View listing ↗</a>
