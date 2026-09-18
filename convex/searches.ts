@@ -5,6 +5,22 @@ import { preferences, type Preferences } from "./schema";
 import type { Doc } from "./_generated/dataModel";
 import { requireUser } from "./users";
 
+const amenityLabels = { parking: "Parking", laundry: "In-unit laundry", dishwasher: "Dishwasher", airConditioning: "Air conditioning",
+  balcony: "Balcony", gym: "Gym", pool: "Pool", elevator: "Elevator", furnished: "Furnished" };
+
+function matchesPreferences(p: Preferences, listing: Doc<"listings">) {
+  const { rent, bedrooms, matches } = listing;
+  if (!matches.includes("Ann Arbor") || rent === undefined || !Number.isFinite(rent) || rent < p.minRent || rent > p.maxRent) return false;
+  if (p.bedrooms.values.length && (bedrooms === undefined || !p.bedrooms.values.includes(bedrooms))) return false;
+  // These labels record facts confirmed against this saved search, including its range and multi-select rules.
+  return (!p.bathrooms.values.length || matches.some(line => /^\d+(?:\.\d+)? bathrooms$/.test(line))) &&
+    (p.sqft.min === undefined && p.sqft.max === undefined || matches.some(line => /^\d+(?:\.\d+)? sq ft$/.test(line))) &&
+    (!p.floors.values.length || matches.some(line => /^Floor \d+$/.test(line))) &&
+    (!p.leaseMonths.values.length || matches.some(line => /^\d+(?: or \d+)* month lease$/.test(line))) &&
+    p.pets.values.every(pet => matches.includes(pet === "cat" ? "Cats allowed" : "Dogs allowed")) &&
+    p.amenities.every(amenity => matches.includes(amenityLabels[amenity.key]));
+}
+
 export const start = mutation({
   args: { preferences },
   returns: v.id("searches"),
@@ -47,11 +63,9 @@ export const results = query({
     const search = await ctx.db.get(searchId);
     if (!search || search.userId !== user._id) throw new ConvexError("Search not found.");
     const listings = await ctx.db.query("listings").withIndex("by_search", q => q.eq("searchId", searchId)).collect();
-    listings.sort((a, b) => a.mustMisses - b.mustMisses || b.score - a.score ||
-      (a.rent === undefined ? (b.rent === undefined ? 0 : 1) : b.rent === undefined ? -1 : a.rent - b.rent));
-    const matches = listings.filter(listing => listing.mustMisses === 0);
-    const misses = listings.filter(listing => listing.mustMisses > 0);
-    return { ...search, listings: [...matches, ...misses.slice(0, 20)], omittedMustMisses: Math.max(0, misses.length - 20) };
+    const matches = listings.filter(listing => matchesPreferences(search.preferences, listing));
+    matches.sort((a, b) => (a.rent ?? Infinity) - (b.rent ?? Infinity));
+    return { ...search, listings: matches };
   },
 });
 
@@ -98,8 +112,6 @@ export function recordedListingScore(p: Preferences, listing: Pick<Doc<"listings
   add("must", listing.rent === undefined ? undefined : listing.rent >= p.minRent && listing.rent <= p.maxRent);
   if (p.bedrooms.values.length) add(p.bedrooms.weight, listing.bedrooms === undefined ? undefined : p.bedrooms.values.includes(listing.bedrooms));
   if (p.pets.values.length) add(p.pets.weight, p.pets.values.every(pet => listing.matches.includes(pet === "cat" ? "Cats allowed" : "Dogs allowed")) ? true : undefined);
-  const labels = { parking: "Parking", laundry: "In-unit laundry", dishwasher: "Dishwasher", airConditioning: "Air conditioning",
-    balcony: "Balcony", gym: "Gym", pool: "Pool", elevator: "Elevator", furnished: "Furnished" };
-  for (const amenity of p.amenities) add(amenity.weight, listing.matches.includes(labels[amenity.key]) ? true : undefined);
+  for (const amenity of p.amenities) add(amenity.weight, listing.matches.includes(amenityLabels[amenity.key]) ? true : undefined);
   return { score, mustMisses };
 }

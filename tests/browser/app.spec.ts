@@ -11,14 +11,9 @@ const savedPreferences: Preferences = {
 const standingUnknowns = ["Move-in availability and current pricing need confirmation", "Additional preferences need confirmation"];
 const baseListing = { _creationTime: 123, searchId: "fixture-search", url: "http://127.0.0.1:5173/listing-fixture", summary: "Published apartment details.",
   rent: 1500, bedrooms: 1, contactEmail: "leasing@example.com", checkedAt: 123 };
-const resultsFixture = { preferences: savedPreferences, status: "complete", omittedMustMisses: 3, listings: [
+const resultsFixture = { preferences: savedPreferences, status: "complete", listings: [
   { ...baseListing, _id: "confirmed", title: "All preferences confirmed", score: 30, mustMisses: 0, unknowns: standingUnknowns,
     matches: ["Ann Arbor", "Within your rent range", "1 bedrooms", "2.5 bathrooms", "900 sq ft", "Floor 5", "Cats allowed", "Dogs allowed", "12 month lease", "Parking", "In-unit laundry", "Furnished"] },
-  { ...baseListing, _id: "unknown", title: "Details still unknown", score: 15, mustMisses: 0,
-    matches: ["Ann Arbor", "Within your rent range", "1 bedrooms", "Cats allowed", "Dogs allowed"], unknowns: [...standingUnknowns, "Floor not confirmed"] },
-  { ...baseListing, _id: "conflicted", title: "Known must-have conflicts", bedrooms: 3, score: -3, mustMisses: 2,
-    matches: ["Ann Arbor", "Within your rent range", "Cats allowed", "Dogs allowed"],
-    unknowns: [...standingUnknowns, "1 or 2 bedrooms: conflicts with must-have", "Parking: conflicts with must-have", "In-unit laundry: conflicts with preference", "Floor not confirmed", "Bathrooms not confirmed"] },
 ] };
 
 async function fixture(page: Page, view: "preferences" | "results", props: Record<string, unknown> = {}) {
@@ -59,7 +54,7 @@ test("offline: two bedroom selections submit one search", async ({ page }) => {
   expect(submissions[0].preferences.bedrooms).toEqual({ values: [1, 2], weight: "must" });
 });
 
-test("offline: selections are must-haves and cleared filters have no preference", async ({ page }) => {
+test("offline: selections are required and cleared filters have no preference", async ({ page }) => {
   await fixture(page, "preferences");
   await expect(page.getByRole("button", { pressed: true })).toHaveCount(0);
   await expect(page.getByRole("radiogroup")).toHaveCount(0);
@@ -83,7 +78,7 @@ test("offline: selections are must-haves and cleared filters have no preference"
   } }]));
 });
 
-test("offline: saved selections survive submission as must-haves", async ({ page }) => {
+test("offline: saved selections survive submission as required filters", async ({ page }) => {
   await fixture(page, "preferences", { initial: savedPreferences });
   await expect(page.getByRole("button", { name: "2 bedrooms", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Dog", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -102,33 +97,15 @@ test("offline: saved selections survive submission as must-haves", async ({ page
   await page.screenshot({ path: "test-results/preferences-mobile.png" });
 });
 
-test("offline: result groups count criteria and keep greyed cards keyboard-accessible", async ({ page }) => {
+test("offline: matching results keep listing links and follow-up keyboard-accessible", async ({ page }) => {
   await fixture(page, "results", { results: resultsFixture });
-  await expect(page.getByRole("heading", { name: "Has everything you asked for" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Close — a few details to confirm" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Missing something you marked must-have" })).toBeVisible();
-  await expect(page.getByText("2 matches · 4 missing a must-have", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Matching apartments", exact: true })).toBeVisible();
+  await expect(page.getByText("1 matching apartment", { exact: true })).toBeVisible();
   await expect(page.getByText("9 of 9 preferences", { exact: true })).toBeVisible();
-  await expect(page.getByText("2 of 9 preferences", { exact: true })).toBeVisible();
-  await expect(page.getByText("3 additional listings missing a must-have are not shown.", { exact: true })).toBeVisible();
-  const card = page.getByRole("article").filter({ has: page.getByRole("heading", { name: "Known must-have conflicts" }) });
-  await expect(card).toHaveClass(/listing-card--miss/);
-  const minimumContrast = await card.evaluate(element => {
-    const rgb = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
-    const canvas = rgb(getComputedStyle(document.documentElement).backgroundColor);
-    const cardStyle = getComputedStyle(element); const opacity = Number(cardStyle.opacity);
-    const composite = (color: number[]) => color.map((channel, i) => channel * opacity + canvas[i] * (1 - opacity));
-    const luminance = (color: number[]) => color.map(channel => channel / 255).map(channel => channel <= .04045 ? channel / 12.92 : ((channel + .055) / 1.055) ** 2.4)
-      .reduce((sum, channel, i) => sum + channel * [.2126, .7152, .0722][i], 0);
-    return Math.min(...Array.from(element.querySelectorAll("h3, p, .preference-count, .listing-top, summary, a, .match-tags span, button")).map(node => {
-      const style = getComputedStyle(node);
-      const background = style.backgroundColor === "rgba(0, 0, 0, 0)" ? cardStyle.backgroundColor : style.backgroundColor;
-      const foreground = luminance(composite(rgb(style.color))); const behind = luminance(composite(rgb(background)));
-      return (Math.max(foreground, behind) + .05) / (Math.min(foreground, behind) + .05);
-    }));
-  });
-  expect(minimumContrast).toBeGreaterThanOrEqual(4.5);
-  await expect(card.getByText("Misses: 1 or 2 bedrooms, parking", { exact: true })).toBeVisible();
+  await expect(page.getByText(/must-have|Close —|Misses:/)).toHaveCount(0);
+  await expect(page.getByRole("article")).toHaveCount(1);
+  const card = page.getByRole("article");
+  await expect(card).toHaveClass("listing-card");
   const link = card.getByRole("link", { name: "View listing" });
   for (let i = 0; i < 20 && !await link.evaluate(element => element === document.activeElement); i++) await page.keyboard.press("Tab");
   await expect(link).toBeFocused();
@@ -141,32 +118,29 @@ test("offline: result groups count criteria and keep greyed cards keyboard-acces
   await card.getByRole("button", { name: "Follow up" }).click();
   await expect(page.getByRole("dialog", { name: "Start the conversation" })).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
-  await page.screenshot({ path: "test-results/grouped-results.png", fullPage: true });
+  await page.screenshot({ path: "test-results/matching-results.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test("offline: empty groups have no headings and an empty search explains the result", async ({ page }) => {
-  await fixture(page, "results", { results: { ...resultsFixture, listings: [], omittedMustMisses: 0 } });
-  await expect(page.getByRole("heading", { name: "No suitable listings in this batch." })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Has everything you asked for" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Close — a few details to confirm" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Missing something you marked must-have" })).toHaveCount(0);
+test("offline: an empty search explains how to change the filters", async ({ page }) => {
+  await fixture(page, "results", { results: { ...resultsFixture, listings: [] } });
+  await expect(page.getByRole("heading", { name: "No listings match your selected filters." })).toBeVisible();
+  await expect(page.getByText("Try removing a filter or widening your budget.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Matching apartments", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("article")).toHaveCount(0);
 });
 
-test("offline: inquiry drafts name selected bedrooms, pets, priorities, and unknown details", async ({ page }) => {
-  const listing = { ...resultsFixture.listings[2], unknowns: [...resultsFixture.listings[2].unknowns, "Furnished: not confirmed"] };
-  await fixture(page, "results", { results: { ...resultsFixture, listings: [listing], omittedMustMisses: 0 } });
+test("offline: inquiry drafts include every selected amenity regardless of old priority", async ({ page }) => {
+  await fixture(page, "results", { results: resultsFixture });
   await page.getByRole("button", { name: "Follow up" }).click();
   const draft = await page.getByLabel("Your message").inputValue();
   expect(draft).toContain("a 1 or 2 bedroom apartment");
   expect(draft).toContain("I have a cat and a dog.");
-  expect(draft).toContain("I'm looking for parking and in-unit laundry.");
-  expect(draft).not.toMatch(/furnished/i);
-  expect(draft).toContain("Could you clarify the details the listing did not confirm: floor and bathrooms?");
-  expect(draft).not.toContain("conflicts with");
+  expect(draft).toContain("I'm looking for parking, in-unit laundry, and furnished.");
+  expect(draft).not.toMatch(/gym|elevator|pool|conflicts with|did not confirm/);
   expect(draft).toContain("Could you confirm availability, total monthly costs, lease terms, and how to schedule a tour?");
-  await expect(page.getByLabel("Subject")).toHaveValue("Apartment inquiry: Known must-have conflicts");
+  await expect(page.getByLabel("Subject")).toHaveValue("Apartment inquiry: All preferences confirmed");
   await expect(page.getByLabel("Your message")).toHaveAttribute("maxlength", "5000");
   await expect(page.getByTestId("submissions")).toHaveText("[]");
 });
@@ -178,7 +152,7 @@ for (const { values, phrase } of [
 ]) {
   test(`offline: inquiry drafts describe ${phrase}`, async ({ page }) => {
     await fixture(page, "results", { results: { ...resultsFixture, preferences: { ...savedPreferences, bedrooms: { values, weight: "must" } },
-      listings: [resultsFixture.listings[0]], omittedMustMisses: 0 } });
+      listings: [resultsFixture.listings[0]] } });
     await page.getByRole("button", { name: "Follow up" }).click();
     await expect(page.getByLabel("Your message")).toHaveValue(new RegExp(phrase));
   });
@@ -213,7 +187,7 @@ test("sign-up, search, persisted preferences, and sign-in", async ({ page }) => 
   console.log(`Live search returned ${listingCount} potential matches.`);
   console.log(`Live flexible search ID: ${await page.getByLabel("Your saved searches").inputValue()}`);
   await expect(page.getByLabel("Your saved searches").locator("option")).toHaveCount(1);
-  if (!listingCount) await expect(page.getByText("No suitable listings in this batch.")).toBeVisible();
+  if (!listingCount) await expect(page.getByText("No listings match your selected filters.")).toBeVisible();
   await page.reload();
   await expect(page.getByRole("button", { name: "New apartment search" })).toBeVisible({ timeout: 20000 });
   await expect(page.getByText("Hello, Alex Taylor", { exact: true })).toBeVisible();

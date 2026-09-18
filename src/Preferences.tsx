@@ -48,7 +48,7 @@ export default function Preferences({ initial, onClose, onSearch }: { initial?: 
       <label>Maximum monthly rent<input name="maxRent" type="number" min="0" max="20000" defaultValue={initial?.maxRent ?? 2000} required /></label>
       <label>Move-in date<input name="moveIn" type="date" defaultValue={initial?.moveIn} required /></label>
     </div>
-    <p className="fine-print">Every selected option is a must-have. Leave a filter blank if you have no preference. Conflicting listings appear lower in your results.</p>
+    <p className="fine-print">Only listings with confirmed matches for every selected filter will appear. Leave a filter blank if you have no preference.</p>
     <Choices label="Bedrooms" options={[0, 1, 2, 3, 4, 5, 6].map(value => ({ value, label: value === 0 ? "Studio" : `${value} bedroom${value > 1 ? "s" : ""}` }))}
       values={criteria.bedrooms.values} onChange={values => setCriteria({ ...criteria, bedrooms: { values, weight: "must" } })} />
     <Choices label="Bathrooms" options={[{ value: 1, label: "1 bathroom" }, { value: 1.5, label: "1.5 bathrooms" }, { value: 2, label: "2+ bathrooms" }]}

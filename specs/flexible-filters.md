@@ -2,15 +2,25 @@
 
 Branch: `flexible-filters`
 
-## September 18 update — simplify selections
+## September 18 update — strict selected filters
 
-This update supersedes the priority controls and defaults below. Keep the
-multi-select toggles, including the amenity grid, but remove every weight control.
-Each selected criterion uses `must`; an empty criterion means no preference.
-New forms start with no optional selections. Saved selections are restored and
-submitted as must-haves when used for a new search. A blank bedroom selection
-must also omit the bedroom term from the discovery query instead of defaulting
-to one bedroom. Existing search results retain their recorded scores.
+This update supersedes the ranking, priority controls, and fallback groups below.
+Keep the multi-select toggles, including the amenity grid, with no weight controls.
+Show a listing only when every selected filter is confirmed, including the rent
+range. A conflicting or unconfirmed selected filter excludes the listing from
+results. Multiple values within a criterion remain alternatives; all selected
+animals and amenities must be confirmed. Empty criteria impose no restriction.
+
+New forms start with no optional selections. A blank bedroom selection also omits
+the bedroom term from discovery. Apply filtering in the results query so saved
+searches follow the same rules without running another paid search. Keep stored
+candidates and legacy scores for existing data compatibility; they do not affect
+inclusion or ordering. Return matching listings sorted by rent, with no fallback
+group or cap on matches. Show one list and an actionable empty state. Inquiry
+drafts include every selected amenity, regardless of its old priority.
+
+Move-in availability and free-text notes remain questions to confirm, as the
+extractor has no structured facts for them. The form states this limitation.
 
 ## 1. Objective
 

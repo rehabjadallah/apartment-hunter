@@ -10,8 +10,9 @@ import { api, internal } from "../convex/_generated/api";
 const mocks = vi.hoisted(() => ({ search: vi.fn(), scrape: vi.fn() }));
 vi.mock("@firecrawl/firecrawl-convex", () => ({ FirecrawlClient: class { search = mocks.search; scrape = mocks.scrape; } }));
 const modules = import.meta.glob("../convex/**/*.ts");
-beforeEach(() => { vi.clearAllMocks(); vi.spyOn(console, "info").mockImplementation(() => {}); vi.spyOn(console, "error").mockImplementation(() => {}); });
-afterEach(() => { vi.restoreAllMocks(); });
+// Scheduled searches must not leak into a later test's Firecrawl mocks.
+beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); vi.spyOn(console, "info").mockImplementation(() => {}); vi.spyOn(console, "error").mockImplementation(() => {}); });
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 async function run(documents: Array<Record<string, unknown> | Error>, urls = documents.map((_, i) => `https://example.com/${i}`), timeoutDuringScrape = false, criteria: Partial<Preferences> = {}) {
   const t = convexTest(schema, modules);
@@ -140,27 +141,88 @@ test("flexible preferences accept multiple selections and schedule just one sear
   expect(await t.run(ctx => ctx.db.query("searches").collect())).toHaveLength(1);
 });
 
-test("results sort by must misses, score, then rent and cap only the missing-must group", async () => {
+test("results only include confirmed selections and sort by rent without a fallback group", async () => {
   const t = convexTest(schema, modules);
   const { userId, searchId } = await t.run(async ctx => {
     const userId = await ctx.db.insert("users", {});
     const searchId = await ctx.db.insert("searches", { userId, preferences: flexiblePreferences, status: "complete" });
     const rows = [
-      { title: "Two misses", mustMisses: 2, score: 100, rent: 500 },
-      { title: "Low score", mustMisses: 0, score: 1, rent: 500 },
-      { title: "Unknown rent", mustMisses: 0, score: 10 },
-      { title: "Higher rent", mustMisses: 0, score: 10, rent: 1700 },
-      { title: "Lower rent", mustMisses: 0, score: 10, rent: 1100 },
-      ...Array.from({ length: 22 }, (_, i) => ({ title: `One miss ${i}`, mustMisses: 1, score: 30 - i, rent: 1000 })),
+      { title: "Outside budget", rent: 2100 }, { title: "Unknown rent", rent: undefined },
+      { title: "Unselected bedroom", bedrooms: 3 }, { title: "Unknown bedroom", bedrooms: undefined },
+      { title: "Unknown city", matches: [] },
+      { title: "Higher rent", rent: 1700, bedrooms: 2 }, { title: "Lower rent", rent: 1100 },
+      ...Array.from({ length: 22 }, (_, i) => ({ title: `Match ${i}`, rent: 1200 + i })),
     ];
-    for (const row of rows) await ctx.db.insert("listings", { ...row, searchId, url: "https://example.com/plan", summary: "", matches: [], unknowns: [], checkedAt: 123 });
+    for (const row of rows) await ctx.db.insert("listings", { searchId, url: "https://example.com/plan", summary: "",
+      rent: 1500, bedrooms: 1, score: 100, mustMisses: 0, matches: ["Ann Arbor"], unknowns: [], checkedAt: 123, ...row });
     return { userId, searchId };
   });
   const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
-  expect(result.listings.slice(0, 4).map(listing => listing.title)).toEqual(["Lower rent", "Higher rent", "Unknown rent", "Low score"]);
-  expect(result.listings.slice(4).map(listing => listing.title)).toEqual(Array.from({ length: 20 }, (_, i) => `One miss ${i}`));
-  expect(result.omittedMustMisses).toBe(3);
-  expect(await t.run(ctx => ctx.db.query("listings").collect())).toHaveLength(27);
+  expect(result.listings.map(listing => listing.title)).toEqual(["Lower rent", ...Array.from({ length: 22 }, (_, i) => `Match ${i}`), "Higher rent"]);
+  expect(result).not.toHaveProperty("omittedMustMisses");
+  expect(await t.run(ctx => ctx.db.query("listings").collect())).toHaveLength(29);
+});
+
+const selectedFacts = ["Ann Arbor", "2.5 bathrooms", "900 sq ft", "Floor 5", "Cats allowed", "Dogs allowed", "6 or 12 month lease",
+  "Parking", "In-unit laundry", "Dishwasher", "Air conditioning", "Balcony", "Gym", "Pool", "Elevator", "Furnished"];
+test.each(selectedFacts)("results exclude missing or conflicting %s regardless of old priority", async missing => {
+  const t = convexTest(schema, modules);
+  const { userId, searchId } = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", {});
+    const preferences: Preferences = { ...flexiblePreferences,
+      bathrooms: { values: [2], weight: "nice" }, floors: { values: [3], weight: "want" }, sqft: { min: 700, max: 1000, weight: "nice" },
+      pets: { values: ["cat", "dog"], weight: "nice" }, leaseMonths: { values: [6, 12], weight: "nice" },
+      amenities: (["parking", "laundry", "dishwasher", "airConditioning", "balcony", "gym", "pool", "elevator", "furnished"] as const)
+        .map(key => ({ key, weight: "nice" })),
+    };
+    const searchId = await ctx.db.insert("searches", { userId, preferences, status: "complete" });
+    const base = { searchId, url: "https://example.com/plan", summary: "", rent: 1500, bedrooms: 2, score: 100, mustMisses: 0, checkedAt: 123 };
+    await ctx.db.insert("listings", { ...base, title: "Confirmed", matches: selectedFacts,
+      unknowns: ["Move-in availability and current pricing need confirmation", "Additional preferences need confirmation"] });
+    for (const outcome of ["not confirmed", "conflicts with preference"]) await ctx.db.insert("listings", { ...base, title: outcome,
+      matches: selectedFacts.filter(fact => fact !== missing), unknowns: [`${missing}: ${outcome}`] });
+    return { userId, searchId };
+  });
+  const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
+  expect(result.listings.map(listing => listing.title)).toEqual(["Confirmed"]);
+});
+
+test("results do not restrict unselected criteria", async () => {
+  const t = convexTest(schema, modules);
+  const { userId, searchId } = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", {});
+    const searchId = await ctx.db.insert("searches", { userId, preferences: { ...flexiblePreferences, bedrooms: { values: [], weight: "must" } }, status: "complete" });
+    for (const bedrooms of [undefined, 0, 6]) await ctx.db.insert("listings", { searchId, title: "No optional filters", url: "https://example.com/plan", summary: "",
+      rent: 1500, bedrooms, matches: ["Ann Arbor"], unknowns: [], score: 5, mustMisses: 0, checkedAt: 123 });
+    return { userId, searchId };
+  });
+  const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
+  expect(result.listings).toHaveLength(3);
+});
+
+test("discovered candidates appear only when every selected filter is confirmed", async () => {
+  const t = convexTest(schema, modules);
+  const { userId, searchId } = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", {});
+    const preferences: Preferences = { ...flexiblePreferences, bathrooms: { values: [2], weight: "nice" },
+      floors: { values: [3], weight: "nice" }, sqft: { min: 700, max: 1000, weight: "nice" },
+      pets: { values: ["cat", "dog"], weight: "nice" }, leaseMonths: { values: [6, 12], weight: "nice" },
+      amenities: [{ key: "parking", weight: "nice" }, { key: "laundry", weight: "nice" }],
+    };
+    return { userId, searchId: await ctx.db.insert("searches", { userId, preferences, status: "searching" }) };
+  });
+  const plan = { ...matchingUnit, bathrooms: 2.5, floor: 5, sqft: 900 };
+  mocks.search.mockResolvedValue({ web: [{ url: "https://example.com/plans" }] });
+  mocks.scrape.mockResolvedValue({ json: { ...matching, dogs: true, leaseMonths: [6, 12], units: [
+    { ...plan, title: "One bedroom" }, { ...plan, title: "Two bedrooms", bedrooms: 2 },
+    { ...plan, title: "Unselected bedroom", bedrooms: 3 }, { ...plan, title: "Unconfirmed floor", floor: null },
+    { ...plan, title: "Wrong floor", floor: 1 }, { ...plan, title: "Too small", sqft: 600 },
+    { ...plan, title: "Too large", sqft: 1100 }, { ...plan, title: "Too few bathrooms", bathrooms: 1.5 },
+    { ...plan, title: "Over budget", rent: 2400 },
+  ] }, markdown: "Published plans", metadata: { statusCode: 200 } });
+  await t.action(internal.discovery.run, { searchId });
+  const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
+  expect(result.listings.map(listing => listing.title)).toEqual(["One bedroom", "Two bedrooms"]);
 });
 
 test("empty criteria and open square-footage bounds are valid", async () => {
