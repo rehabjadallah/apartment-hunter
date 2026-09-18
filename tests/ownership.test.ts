@@ -4,7 +4,12 @@ import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 
 const modules = import.meta.glob("../convex/**/*.ts");
-const preferences = { city: "Ann Arbor, Michigan" as const, minRent: 800, maxRent: 2000, bedrooms: 1, moveIn: "2026-10-01", pets: "none" as const, parking: false, laundry: false, notes: "" };
+const preferences = {
+  city: "Ann Arbor, Michigan" as const, minRent: 800, maxRent: 2000, moveIn: "2026-10-01", notes: "",
+  bedrooms: { values: [1], weight: "must" as const }, bathrooms: { values: [], weight: "nice" as const },
+  floors: { values: [], weight: "nice" as const }, leaseMonths: { values: [], weight: "nice" as const },
+  sqft: { weight: "nice" as const }, pets: { values: [], weight: "nice" as const }, amenities: [],
+};
 
 async function fixture() {
   const t = convexTest(schema, modules);
@@ -12,7 +17,7 @@ async function fixture() {
     const owner = await ctx.db.insert("users", {});
     const stranger = await ctx.db.insert("users", {});
     const searchId = await ctx.db.insert("searches", { userId: owner, preferences, status: "complete" });
-    const listingId = await ctx.db.insert("listings", { searchId, title: "Test apartment", url: "https://example.com/listing", summary: "Test", matches: [], unknowns: [], checkedAt: Date.now(), contactEmail: "leasing@example.com" });
+    const listingId = await ctx.db.insert("listings", { searchId, title: "Test apartment", url: "https://example.com/listing", summary: "Test", matches: [], unknowns: [], score: 0, mustMisses: 0, checkedAt: Date.now(), contactEmail: "leasing@example.com" });
     const inquiryId = await ctx.db.insert("inquiries", { userId: owner, listingId, subject: "Test", body: "Test", status: "failed" });
     return { owner, stranger, searchId, listingId, inquiryId };
   });

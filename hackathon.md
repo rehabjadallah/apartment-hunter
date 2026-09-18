@@ -2,17 +2,17 @@
 
 - **Project:** apartment-hunter
 - **Event:** Convex All Gas Hackathon
-- **What it does:** Helps signed-in users find Ann Arbor apartments from their preferences and review rental inquiries before sending.
+- **What it does:** Shows signed-in users Ann Arbor apartments that meet their selected filters and lets them review rental inquiries before sending.
 - **Live app:** not deployed
 - **Repo:** https://github.com/rehabjadallah/apartment-hunter
-- **Frontend:** not deployed
+- **Frontend:** Convex static hosting
 - **Convex deployment:** https://affable-chipmunk-297.convex.cloud
-- **Components:** @convex-dev/auth (core, password, username)
-- **Convex features:** schema, indexes, queries, mutations, actions, scheduled functions, realtime queries
+- **Components:** @convex-dev/auth (core, password, username), @convex-dev/static-hosting
+- **Convex features:** schema, indexes, queries, mutations, actions, scheduled functions, realtime queries, HTTP routes
 - **Auth:** Convex Auth v2 preview
 - **AI models:** none
 - **Started:** 2026-09-04T19:57:21Z
-- **Last updated:** 2026-09-17T03:22:12Z
+- **Last updated:** 2026-09-18T20:10:53Z
 
 ## Log
 
@@ -45,3 +45,11 @@ Discovery requests 20 results, scrapes up to 15 unique pages in awaited batches 
 Extracts every published floor plan, keeps unknown facts unconfirmed, accepts Ann Arbor Charter Township, and preserves rent and bedroom conflict filters; nonempty floor plans override the page's listing flag.
 Logs selected URLs, stage and unit counts, filter drops, and distinct 403/429 reasons; failed scrapes are skipped without retries.
 Verification on the discovery branch passed typecheck and all 34 tests. One final one-bedroom search extracted 44 units and saved 21 listings, five with confirmed published contact emails; five pages still hit 429s, and unrelated search results remain.
+
+### 2026-09-18 - 69d8761
+Merged discovery work into main, added profile naming and a missing-contact tooltip, and configured Convex static hosting; no public frontend URL is documented (`src/NamePrompt.tsx`, `convex/users.ts`, `convex/convex.config.ts`, `convex/http.ts`).
+Added multi-select bedrooms, bathrooms, floor, square footage, pets, lease terms, and amenities with saved-preference migration (`convex/schema.ts`, `convex/migrations.ts`, `src/Preferences.tsx`).
+Replaced weighted fallback groups with confirmed matches for every selected filter; blank filters impose no restriction, and results sort by rent. Move-in availability and free-text notes still need confirmation (`convex/searches.ts`, `src/Dashboard.tsx`).
+Expanded extraction, added published complex names beneath floor-plan titles, and updated inquiry drafts for all selected amenities; older listings without a stored complex name omit the subtitle (`convex/discovery.ts`, `src/Dashboard.tsx`).
+Session verification passed 119 unit tests, nine offline browser checks, typecheck, and the production build; updated the development backend. No email was sent during verification (`tests/discovery.test.ts`, `tests/browser/app.spec.ts`).
+Working tree: removed the preference-count label from result cards; this edit remains uncommitted (`src/Dashboard.tsx`).

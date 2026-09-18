@@ -52,6 +52,13 @@ fieldset { padding: 0; border: 0; min-width: 0; display: grid; gap: 18px; }
 .checks label { display: flex; align-items: center; }
 .checks input { width: 17px; height: 17px; accent-color: #2d4937; }
 .field-caption { font-size: 13px; margin: 0; font-weight: 600; }
+.criterion { border-top: 1px solid #dce1d6; padding-top: 14px; gap: 12px; }
+.criterion legend { padding: 0 8px 0 0; font-size: 14px; font-weight: 600; }
+.value-toggles { display: flex; flex-wrap: wrap; gap: 8px; }
+.value-toggles button, .amenity-option > button { background: #fffefa; color: #263c30; border: 1px solid #7c8c74; padding: 9px 12px; }
+.value-toggles button[aria-pressed="true"], .amenity-option > button[aria-pressed="true"] { background: #2d4937; color: #fffefa; border-color: #2d4937; }
+.amenity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.amenity-option { display: grid; align-content: start; gap: 10px; }
 .muted, .fine-print { color: #66715f; line-height: 1.6; }
 .fine-print { font-size: 12px; }
 .error { background: #f8e9df; color: #8a3e24; border-radius: 8px; padding: 12px; font-size: 14px; line-height: 1.5; }
@@ -72,10 +79,15 @@ dialog::backdrop { background: #23332966; backdrop-filter: blur(4px); }
 .empty { text-align: center; padding: 56px 28px; margin: 24px 0; }
 .empty p { color: #66715f; line-height: 1.6; }
 .listing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.listing-group { margin-bottom: 32px; }
+.listing-group > h2 { margin-bottom: 18px; }
 .listing-card { background: #fffefa; border: 1px solid #dce1d6; border-radius: 16px; padding: 24px; }
+.price-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.preference-count { font-size: 12px; color: #414d3e; }
 .listing-top, .listing-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .listing-top { font-size: 12px; color: #66715f; margin-bottom: 20px; }
-.listing-card h2 { font-size: 22px; line-height: 1.35; }
+.listing-card h3 { font-size: 22px; line-height: 1.35; }
+.listing-card .complex-name { margin: 4px 0 0; color: #52604d; font-size: 13px; overflow-wrap: anywhere; }
 .listing-card > p { font-size: 14px; line-height: 1.6; color: #66715f; }
 .listing-card .price { font-size: 25px; color: #263c30; font-weight: 600; margin: 12px 0; }
 .price small { font-size: 13px; font-weight: 400; }

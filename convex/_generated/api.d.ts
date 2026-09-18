@@ -13,6 +13,7 @@ import type * as discovery from "../discovery.js";
 import type * as health from "../health.js";
 import type * as http from "../http.js";
 import type * as inquiries from "../inquiries.js";
+import type * as migrations from "../migrations.js";
 import type * as searches from "../searches.js";
 import type * as services from "../services.js";
 import type * as setup from "../setup.js";
@@ -30,6 +31,7 @@ declare const fullApi: ApiFromModules<{
   health: typeof health;
   http: typeof http;
   inquiries: typeof inquiries;
+  migrations: typeof migrations;
   searches: typeof searches;
   services: typeof services;
   setup: typeof setup;

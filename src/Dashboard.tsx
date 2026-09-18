@@ -4,12 +4,26 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import type { Doc, Id } from "../convex/_generated/dataModel";
-import Preferences from "./Preferences";
+import Preferences, { amenityLabels } from "./Preferences";
 import Modal from "./Modal";
 import PasswordSettings from "./PasswordSettings";
 import NamePrompt from "./NamePrompt";
 
 const money = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+
+function preferenceCount(p: Doc<"searches">["preferences"], listing: Doc<"listings">) {
+  const matches = listing.matches;
+  const criteria = [
+    [p.bedrooms.values.length > 0, matches.some(line => line === "Studio" || /^\d+ bedrooms$/.test(line))],
+    [p.bathrooms.values.length > 0, matches.some(line => line.endsWith(" bathrooms"))],
+    [p.sqft.min !== undefined || p.sqft.max !== undefined, matches.some(line => line.endsWith(" sq ft"))],
+    [p.floors.values.length > 0, matches.some(line => line.startsWith("Floor "))],
+    [p.pets.values.length > 0, p.pets.values.every(pet => matches.includes(pet === "cat" ? "Cats allowed" : "Dogs allowed"))],
+    [p.leaseMonths.values.length > 0, matches.some(line => line.endsWith(" month lease"))],
+    ...p.amenities.map(amenity => [true, matches.includes(amenityLabels[amenity.key])]),
+  ].filter(([selected]) => selected);
+  return `${criteria.filter(([, confirmed]) => confirmed).length} of ${criteria.length} preferences`;
+}
 
 export default function Dashboard() {
   const user = useQuery(api.users.current);
@@ -29,8 +43,8 @@ export default function Dashboard() {
     <section className="dashboard-heading"><div><p className="eyebrow">Ann Arbor, Michigan</p><h1>Find your <span>next chapter.</span></h1><p className="muted">Your preferences. Your shortlist. Your conversations.</p></div><button onClick={() => setEditing(true)}>New apartment search</button></section>
     <nav className="tabs" aria-label="Your apartment search"><button aria-current={tab === "search" ? "page" : undefined} onClick={() => setTab("search")}>Apartments</button><button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => setTab("inbox")}>Conversations</button></nav>
     {tab === "search" ? <>
-      {searches.length > 0 && <label className="search-picker">Your saved searches<select value={searchId} onChange={e => setSelected(e.target.value as Id<"searches">)}>{searches.map(s => <option key={s._id} value={s._id}>{new Date(s._creationTime).toLocaleDateString()} · {money(s.preferences.minRent)}–{money(s.preferences.maxRent)} · {s.preferences.bedrooms === 0 ? "Studio" : `${s.preferences.bedrooms} bed`}</option>)}</select></label>}
-      {searchId ? <Results key={searchId} searchId={searchId} onSent={() => setTab("inbox")} /> : <section className="empty panel"><h2>A place that fits your life.</h2><p>Start with your budget and must-haves. We'll look for apartments in Ann Arbor.</p><button onClick={() => setEditing(true)}>Set my preferences</button></section>}
+      {searches.length > 0 && <label className="search-picker">Your saved searches<select value={searchId} onChange={e => setSelected(e.target.value as Id<"searches">)}>{searches.map(s => <option key={s._id} value={s._id}>{new Date(s._creationTime).toLocaleDateString()} · {money(s.preferences.minRent)}–{money(s.preferences.maxRent)} · {s.preferences.bedrooms.values.length ? `${s.preferences.bedrooms.values.join(", ")} bed` : "Any"}</option>)}</select></label>}
+      {searchId ? <Results key={searchId} searchId={searchId} onSent={() => setTab("inbox")} /> : <section className="empty panel"><h2>A place that fits your life.</h2><p>Start with your budget and preferences. We'll look for apartments in Ann Arbor.</p><button onClick={() => setEditing(true)}>Set my preferences</button></section>}
     </> : <Conversations />}
     {(editing ?? (!user.preferences && !settings)) && <Preferences initial={user.preferences} onClose={() => setEditing(false)} onSearch={id => { setSelected(id); setEditing(false); setTab("search"); }} />}
     </>}
@@ -38,18 +52,22 @@ export default function Dashboard() {
   </>;
 }
 
-function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent: () => void }) {
+export function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent: () => void }) {
   const results = useQuery(api.searches.results, { searchId });
   const [contact, setContact] = useState<Doc<"listings"> | null>(null);
   if (!results) return <p role="status">Loading apartments…</p>;
   return <>
     {results.status === "searching" && <div className="search-progress" role="status"><span className="spinner" /><div><strong>Looking around Ann Arbor…</strong><p>Finding listings and checking the details. Results will appear here as they're ready.</p></div></div>}
     {results.error && <p role="alert" className="error">{results.error}</p>}
-    {results.status === "complete" && !results.listings.length && <section className="empty panel"><h2>No suitable listings in this batch.</h2><p>We checked a small set of web results. Try another search or a wider budget.</p></section>}
-    {results.listings.length > 0 && <p className="muted">{results.listings.length} potential {results.listings.length === 1 ? "match" : "matches"} · Confirm availability and details with the property.</p>}
+    {results.status === "complete" && !results.listings.length && <section className="empty panel"><h2>No listings match your selected filters.</h2><p>Try removing a filter or widening your budget.</p></section>}
+    {results.listings.length > 0 && <><p className="muted" role="status">{results.listings.length} matching apartment{results.listings.length === 1 ? "" : "s"}</p>
+    <section className="listing-group"><h2>Matching apartments</h2>
     <div className="listing-grid">{results.listings.map(listing => <article className="listing-card" key={listing._id}>
       <div className="listing-top"><span>Ann Arbor</span><span>{listing.bedrooms === undefined ? "Beds unconfirmed" : listing.bedrooms === 0 ? "Studio" : `${listing.bedrooms} bed`}</span></div>
-      <h2>{listing.title}</h2><p className="price">{listing.rent === undefined ? "Ask about pricing" : <>{money(listing.rent)} <small>/ month</small></>}</p>
+      <h3>{listing.title}</h3>
+      {listing.complexName && <p className="complex-name">{listing.complexName}</p>}
+      <div className="price-row"><p className="price">{listing.rent === undefined ? "Ask about pricing" : <>{money(listing.rent)} <small>/ month</small></>}</p>
+    </div>
       <p>{listing.summary}</p><div className="match-tags">{listing.matches.map(m => <span key={m}>{m}</span>)}</div>
       <details><summary>Details to confirm ({listing.unknowns.length})</summary><ul>{listing.unknowns.map(u => <li key={u}>{u}</li>)}</ul></details>
       <div className="listing-actions"><a href={listing.url} target="_blank" rel="noopener noreferrer">View listing ↗</a>
@@ -58,7 +76,7 @@ function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent: () =>
           {!listing.contactEmail && <span role="tooltip" id={`contact-tooltip-${listing._id}`} className="contact-tooltip">No email contact found. Use the listing's contact form.</span>}
         </span>
       </div>
-    </article>)}</div>
+    </article>)}</div></section></>}
     {contact && <InquiryForm listing={contact} preferences={results.preferences} onClose={() => setContact(null)} onSent={() => { setContact(null); onSent(); }} />}
   </>;
 }
@@ -67,7 +85,14 @@ function InquiryForm({ listing, preferences: p, onClose, onSent }: { listing: Do
   const send = useMutation(api.inquiries.send);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  const draft = `Hello,\n\nI'm interested in ${listing.title}:\n${listing.url}\n\nI'm looking for ${p.bedrooms === 0 ? "a studio" : `a ${p.bedrooms}-bedroom apartment`} in Ann Arbor, with monthly rent between ${money(p.minRent)} and ${money(p.maxRent)}, and a move-in date around ${p.moveIn}.\n${p.pets !== "none" ? `I have a ${p.pets}. Please confirm your pet policy and any fees.\n` : ""}${p.parking ? "I need parking.\n" : ""}${p.laundry ? "I need in-unit laundry.\n" : ""}${p.notes ? `Additional preferences: ${p.notes}\n` : ""}\nCould you confirm availability, total monthly costs, lease terms, and how to schedule a tour?\n\nThank you!`;
+  const bedrooms = p.bedrooms.values;
+  const counts = bedrooms.filter(value => value > 0);
+  const apartment = [bedrooms.includes(0) ? "a studio" : "", counts.length ? `a ${counts.join(" or ")} bedroom apartment` : ""].filter(Boolean).join(" or ") || "an apartment";
+  const conjunction = new Intl.ListFormat("en-US", { style: "long", type: "conjunction" });
+  const amenities = p.amenities.map(item => amenityLabels[item.key].toLowerCase());
+  const unconfirmed = listing.unknowns.filter(line => line.endsWith(" not confirmed"))
+    .map(line => line.replace(/:? not confirmed$/, "").toLowerCase());
+  const draft = `Hello,\n\nI'm interested in ${listing.title}:\n${listing.url}\n\nI'm looking for ${apartment} in Ann Arbor, with monthly rent between ${money(p.minRent)} and ${money(p.maxRent)}, and a move-in date around ${p.moveIn}.\n${p.pets.values.length ? `I have a ${p.pets.values.join(" and a ")}. Please confirm your pet policy and any fees.\n` : ""}${amenities.length ? `I'm looking for ${conjunction.format(amenities)}.\n` : ""}${p.notes ? `Additional preferences: ${p.notes}\n` : ""}${unconfirmed.length ? `Could you clarify the details the listing did not confirm: ${conjunction.format(unconfirmed)}?\n` : ""}\nCould you confirm availability, total monthly costs, lease terms, and how to schedule a tour?\n\nThank you!`;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const data = new FormData(event.currentTarget); setPending(true); setError("");
     try { await send({ listingId: listing._id, subject: String(data.get("subject")), body: String(data.get("body")) }); onSent(); }

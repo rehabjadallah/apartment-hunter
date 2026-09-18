@@ -1,22 +1,27 @@
 import { convexTest } from "convex-test";
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
+import { defineSchema, defineTable } from "convex/server";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import schema from "../convex/schema";
-import { internal } from "../convex/_generated/api";
+import { migrationPreferences } from "../convex/migrations";
+import type { Preferences } from "../convex/schema";
+import { api, internal } from "../convex/_generated/api";
 
 const mocks = vi.hoisted(() => ({ search: vi.fn(), scrape: vi.fn() }));
 vi.mock("@firecrawl/firecrawl-convex", () => ({ FirecrawlClient: class { search = mocks.search; scrape = mocks.scrape; } }));
 const modules = import.meta.glob("../convex/**/*.ts");
-beforeEach(() => { vi.clearAllMocks(); vi.spyOn(console, "info").mockImplementation(() => {}); vi.spyOn(console, "error").mockImplementation(() => {}); });
-afterEach(() => { vi.restoreAllMocks(); });
+// Scheduled searches must not leak into a later test's Firecrawl mocks.
+beforeEach(() => { vi.useFakeTimers(); vi.clearAllMocks(); vi.spyOn(console, "info").mockImplementation(() => {}); vi.spyOn(console, "error").mockImplementation(() => {}); });
+afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
-async function run(documents: Array<Record<string, unknown> | Error>, urls = documents.map((_, i) => `https://example.com/${i}`), timeoutDuringScrape = false) {
+async function run(documents: Array<Record<string, unknown> | Error>, urls = documents.map((_, i) => `https://example.com/${i}`), timeoutDuringScrape = false, criteria: Partial<Preferences> = {}) {
   const t = convexTest(schema, modules);
   const searchId = await t.run(async ctx => {
     const userId = await ctx.db.insert("users", {});
     return ctx.db.insert("searches", { userId, status: "searching", preferences: {
-      city: "Ann Arbor, Michigan", minRent: 800, maxRent: 2000, bedrooms: 1, pets: "cat",
-      moveIn: "2026-11-01", parking: true, laundry: true, notes: "", } });
+      ...flexiblePreferences, bedrooms: { values: [1], weight: "must" }, pets: { values: ["cat"], weight: "must" },
+      amenities: [{ key: "parking", weight: "must" }, { key: "laundry", weight: "must" }], ...criteria,
+    } });
   });
   mocks.search.mockResolvedValue({ web: urls.map(url => ({ url })) });
   mocks.scrape.mockImplementation(async (_ctx, url: string) => {
@@ -31,12 +36,376 @@ async function run(documents: Array<Record<string, unknown> | Error>, urls = doc
 const matchingUnit = { title: "One bedroom", rent: 1500, bedrooms: 1 };
 const matching = { isListing: true, city: "Ann Arbor", summary: "Apartments near downtown.", cats: true, parking: true, laundry: true, contactEmail: "leasing@example.com", units: [matchingUnit] };
 
+test("published complex names are shared by plans without replacing their model names", async () => {
+  mocks.scrape.mockResolvedValueOnce({ json: { ...matching, complexName: "  Maple Grove Apartments  ",
+    units: [{ ...matchingUnit, title: "The Oak" }, { ...matchingUnit, title: "The Elm" }] },
+    markdown: "# Maple Grove Apartments\nThe Oak and The Elm floor plans." });
+  const result = await run([matching]);
+  expect(result.listings.map(({ title, complexName }) => ({ title, complexName }))).toEqual([
+    { title: "The Oak", complexName: "Maple Grove Apartments" }, { title: "The Elm", complexName: "Maple Grove Apartments" },
+  ]);
+});
+
+test.each([null, "", "   ", 42, "Invented Apartments"])("unconfirmed complex names are omitted (%j)", async complexName => {
+  const result = await run([{ ...matching, complexName }]);
+  expect(result.listings).toHaveLength(1);
+  expect(result.listings[0]).not.toHaveProperty("complexName");
+});
+
+const flexiblePreferences = {
+  city: "Ann Arbor, Michigan" as const, minRent: 800, maxRent: 2000, moveIn: "2026-11-01", notes: "",
+  bedrooms: { values: [1, 2], weight: "must" as const }, bathrooms: { values: [], weight: "nice" as const },
+  floors: { values: [], weight: "nice" as const }, leaseMonths: { values: [], weight: "nice" as const },
+  sqft: { weight: "nice" as const }, pets: { values: [], weight: "nice" as const }, amenities: [],
+};
+
+const migrationSchema = defineSchema({
+  ...schema.tables,
+  users: defineTable({ ...schema.tables.users.validator.fields, preferences: v.optional(migrationPreferences) }),
+  searches: defineTable({ ...schema.tables.searches.validator.fields, preferences: migrationPreferences }).index("by_user", ["userId"]),
+  listings: defineTable({ ...schema.tables.listings.validator.fields, score: v.optional(v.number()), mustMisses: v.optional(v.number()) }).index("by_search", ["searchId"]),
+});
+const oldPreferences = { city: "Ann Arbor, Michigan" as const, minRent: 800, maxRent: 2000,
+  bedrooms: 2, pets: "cat" as const, parking: true, laundry: true, moveIn: "2026-11-01", notes: "Keep these notes" };
+
+test("migration preserves saved data, backfills only recorded facts, and can run twice", async () => {
+  const t = convexTest(migrationSchema, modules);
+  const ids = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", { name: "Alex", inboxId: "existing-inbox", preferences: oldPreferences });
+    const emptyUserId = await ctx.db.insert("users", {});
+    const modernUserId = await ctx.db.insert("users", { preferences: flexiblePreferences });
+    const searchId = await ctx.db.insert("searches", { userId, status: "complete", preferences: oldPreferences });
+    const base = { searchId, title: "Saved apartment", url: "https://example.com/old", summary: "Published facts", checkedAt: 123, contactEmail: "leasing@example.com" };
+    const listingId = await ctx.db.insert("listings", { ...base, rent: 1600, bedrooms: 2,
+      matches: ["Ann Arbor", "Within your rent range", "2 bedrooms", "Cats allowed", "Parking"], unknowns: ["In-unit laundry: not confirmed"] });
+    const unknownId = await ctx.db.insert("listings", { ...base, matches: [], unknowns: ["Rent not confirmed", "Bedrooms not confirmed"] });
+    const conflictId = await ctx.db.insert("listings", { ...base, rent: 2100, bedrooms: 3, matches: [], unknowns: [] });
+    const scoredId = await ctx.db.insert("listings", { ...base, matches: [], unknowns: [], score: 42, mustMisses: 2 });
+    return { userId, emptyUserId, modernUserId, searchId, listingId, unknownId, conflictId, scoredId };
+  });
+  const before = await t.run(async ctx => ({ listing: await ctx.db.get(ids.listingId), search: await ctx.db.get(ids.searchId) }));
+  expect(await t.mutation(internal.migrations.flexibleFilters, {})).toEqual({ users: 1, searches: 1, listings: 3, checked: { users: 3, searches: 1, listings: 4 } });
+  const expected = { ...flexiblePreferences, bedrooms: { values: [2], weight: "must" }, notes: "Keep these notes",
+    pets: { values: ["cat"], weight: "must" }, amenities: [{ key: "parking", weight: "must" }, { key: "laundry", weight: "must" }] };
+  const after = await t.run(async ctx => ({ user: await ctx.db.get(ids.userId), search: await ctx.db.get(ids.searchId),
+    listing: await ctx.db.get(ids.listingId), unknown: await ctx.db.get(ids.unknownId), conflict: await ctx.db.get(ids.conflictId) }));
+  expect(after.user).toMatchObject({ name: "Alex", inboxId: "existing-inbox", preferences: expected });
+  expect(after.search).toEqual({ ...before.search, preferences: expected });
+  expect(after.listing).toEqual({ ...before.listing, score: 20, mustMisses: 0 });
+  expect(after.unknown).toMatchObject({ score: 0, mustMisses: 0 });
+  expect(after.conflict).toMatchObject({ score: -10, mustMisses: 2 });
+  expect((await t.run(ctx => ctx.db.get(ids.emptyUserId)))?.preferences).toBeUndefined();
+  expect((await t.run(ctx => ctx.db.get(ids.modernUserId)))?.preferences).toEqual(flexiblePreferences);
+  expect(await t.run(ctx => ctx.db.get(ids.scoredId))).toMatchObject({ score: 42, mustMisses: 2 });
+  expect(await t.mutation(internal.migrations.flexibleFilters, {})).toEqual({ users: 0, searches: 0, listings: 0, checked: { users: 3, searches: 1, listings: 4 } });
+});
+
+test.each(["none", "dog"] as const)("migration handles %s pets and unselected amenities", async pets => {
+  const t = convexTest(migrationSchema, modules);
+  const userId = await t.run(ctx => ctx.db.insert("users", { preferences: { ...oldPreferences, pets, parking: false, laundry: false } }));
+  await t.mutation(internal.migrations.flexibleFilters, {});
+  const preferences = (await t.run(ctx => ctx.db.get(userId)))?.preferences;
+  expect(preferences?.pets).toEqual({ values: pets === "none" ? [] : ["dog"], weight: pets === "none" ? "nice" : "must" });
+  expect(preferences?.amenities).toEqual([]);
+  expect(preferences).not.toHaveProperty("parking");
+  expect(preferences).not.toHaveProperty("laundry");
+});
+
+test("migration rolls back instead of guessing missing original preferences", async () => {
+  const t = convexTest(migrationSchema, modules);
+  const ids = await t.run(async ctx => [await ctx.db.insert("users", { preferences: oldPreferences }),
+    await ctx.db.insert("users", { preferences: { bedrooms: 2 } })]);
+  await expect(t.mutation(internal.migrations.flexibleFilters, {})).rejects.toThrow("Cannot migrate incomplete preferences");
+  expect((await t.run(ctx => ctx.db.get(ids[0])))?.preferences).toEqual(oldPreferences);
+});
+
+test("migration refuses oversized datasets before changing any row", async () => {
+  const t = convexTest(migrationSchema, modules);
+  const userId = await t.run(async ctx => {
+    const first = await ctx.db.insert("users", { preferences: oldPreferences });
+    for (let i = 0; i < 2000; i++) await ctx.db.insert("users", {});
+    return first;
+  });
+  await expect(t.mutation(internal.migrations.flexibleFilters, {})).rejects.toThrow("exceeds 2000 rows");
+  expect((await t.run(ctx => ctx.db.get(userId)))?.preferences).toEqual(oldPreferences);
+});
+
+test("migration rolls back if a historical listing has no saved search", async () => {
+  const t = convexTest(migrationSchema, modules);
+  const userId = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", { preferences: oldPreferences });
+    const searchId = await ctx.db.insert("searches", { userId, preferences: oldPreferences, status: "complete" });
+    await ctx.db.insert("listings", { searchId, title: "Orphan", url: "https://example.com/old", summary: "", matches: [], unknowns: [], checkedAt: 123 });
+    await ctx.db.delete(searchId);
+    return userId;
+  });
+  await expect(t.mutation(internal.migrations.flexibleFilters, {})).rejects.toThrow("without its saved search");
+  expect((await t.run(ctx => ctx.db.get(userId)))?.preferences).toEqual(oldPreferences);
+});
+
+test("flexible preferences accept multiple selections and schedule just one search", async () => {
+  const t = convexTest(schema, modules);
+  const userId = await t.run(ctx => ctx.db.insert("users", {}));
+  const client = t.withIdentity({ subject: userId });
+  const searchId = await client.mutation(api.searches.start, { preferences: flexiblePreferences });
+  expect((await t.run(ctx => ctx.db.get(searchId)))?.preferences).toEqual(flexiblePreferences);
+  expect((await t.run(ctx => ctx.db.get(userId)))?.preferences).toEqual(flexiblePreferences);
+  expect(await t.run(ctx => ctx.db.query("searches").collect())).toHaveLength(1);
+  const scheduled = await t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
+  expect(scheduled.filter(task => task.name === "discovery:run")).toHaveLength(1);
+  await expect(client.mutation(api.searches.start, { preferences: flexiblePreferences })).rejects.toThrow("Please wait a minute");
+  expect(await t.run(ctx => ctx.db.query("searches").collect())).toHaveLength(1);
+});
+
+test("results only include confirmed selections and sort by rent without a fallback group", async () => {
+  const t = convexTest(schema, modules);
+  const { userId, searchId } = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", {});
+    const searchId = await ctx.db.insert("searches", { userId, preferences: flexiblePreferences, status: "complete" });
+    const rows = [
+      { title: "Outside budget", rent: 2100 }, { title: "Unknown rent", rent: undefined },
+      { title: "Unselected bedroom", bedrooms: 3 }, { title: "Unknown bedroom", bedrooms: undefined },
+      { title: "Unknown city", matches: [] },
+      { title: "Higher rent", rent: 1700, bedrooms: 2 }, { title: "Lower rent", rent: 1100 },
+      ...Array.from({ length: 22 }, (_, i) => ({ title: `Match ${i}`, rent: 1200 + i })),
+    ];
+    for (const row of rows) await ctx.db.insert("listings", { searchId, url: "https://example.com/plan", summary: "",
+      rent: 1500, bedrooms: 1, score: 100, mustMisses: 0, matches: ["Ann Arbor"], unknowns: [], checkedAt: 123, ...row });
+    return { userId, searchId };
+  });
+  const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
+  expect(result.listings.map(listing => listing.title)).toEqual(["Lower rent", ...Array.from({ length: 22 }, (_, i) => `Match ${i}`), "Higher rent"]);
+  expect(result).not.toHaveProperty("omittedMustMisses");
+  expect(await t.run(ctx => ctx.db.query("listings").collect())).toHaveLength(29);
+});
+
+const selectedFacts = ["Ann Arbor", "2.5 bathrooms", "900 sq ft", "Floor 5", "Cats allowed", "Dogs allowed", "6 or 12 month lease",
+  "Parking", "In-unit laundry", "Dishwasher", "Air conditioning", "Balcony", "Gym", "Pool", "Elevator", "Furnished"];
+test.each(selectedFacts)("results exclude missing or conflicting %s regardless of old priority", async missing => {
+  const t = convexTest(schema, modules);
+  const { userId, searchId } = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", {});
+    const preferences: Preferences = { ...flexiblePreferences,
+      bathrooms: { values: [2], weight: "nice" }, floors: { values: [3], weight: "want" }, sqft: { min: 700, max: 1000, weight: "nice" },
+      pets: { values: ["cat", "dog"], weight: "nice" }, leaseMonths: { values: [6, 12], weight: "nice" },
+      amenities: (["parking", "laundry", "dishwasher", "airConditioning", "balcony", "gym", "pool", "elevator", "furnished"] as const)
+        .map(key => ({ key, weight: "nice" })),
+    };
+    const searchId = await ctx.db.insert("searches", { userId, preferences, status: "complete" });
+    const base = { searchId, url: "https://example.com/plan", summary: "", rent: 1500, bedrooms: 2, score: 100, mustMisses: 0, checkedAt: 123 };
+    await ctx.db.insert("listings", { ...base, title: "Confirmed", matches: selectedFacts,
+      unknowns: ["Move-in availability and current pricing need confirmation", "Additional preferences need confirmation"] });
+    for (const outcome of ["not confirmed", "conflicts with preference"]) await ctx.db.insert("listings", { ...base, title: outcome,
+      matches: selectedFacts.filter(fact => fact !== missing), unknowns: [`${missing}: ${outcome}`] });
+    return { userId, searchId };
+  });
+  const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
+  expect(result.listings.map(listing => listing.title)).toEqual(["Confirmed"]);
+});
+
+test("results do not restrict unselected criteria", async () => {
+  const t = convexTest(schema, modules);
+  const { userId, searchId } = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", {});
+    const searchId = await ctx.db.insert("searches", { userId, preferences: { ...flexiblePreferences, bedrooms: { values: [], weight: "must" } }, status: "complete" });
+    for (const bedrooms of [undefined, 0, 6]) await ctx.db.insert("listings", { searchId, title: "No optional filters", url: "https://example.com/plan", summary: "",
+      rent: 1500, bedrooms, matches: ["Ann Arbor"], unknowns: [], score: 5, mustMisses: 0, checkedAt: 123 });
+    return { userId, searchId };
+  });
+  const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
+  expect(result.listings).toHaveLength(3);
+});
+
+test("discovered candidates appear only when every selected filter is confirmed", async () => {
+  const t = convexTest(schema, modules);
+  const { userId, searchId } = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", {});
+    const preferences: Preferences = { ...flexiblePreferences, bathrooms: { values: [2], weight: "nice" },
+      floors: { values: [3], weight: "nice" }, sqft: { min: 700, max: 1000, weight: "nice" },
+      pets: { values: ["cat", "dog"], weight: "nice" }, leaseMonths: { values: [6, 12], weight: "nice" },
+      amenities: [{ key: "parking", weight: "nice" }, { key: "laundry", weight: "nice" }],
+    };
+    return { userId, searchId: await ctx.db.insert("searches", { userId, preferences, status: "searching" }) };
+  });
+  const plan = { ...matchingUnit, bathrooms: 2.5, floor: 5, sqft: 900 };
+  mocks.search.mockResolvedValue({ web: [{ url: "https://example.com/plans" }] });
+  mocks.scrape.mockResolvedValue({ json: { ...matching, dogs: true, leaseMonths: [6, 12], units: [
+    { ...plan, title: "One bedroom" }, { ...plan, title: "Two bedrooms", bedrooms: 2 },
+    { ...plan, title: "Unselected bedroom", bedrooms: 3 }, { ...plan, title: "Unconfirmed floor", floor: null },
+    { ...plan, title: "Wrong floor", floor: 1 }, { ...plan, title: "Too small", sqft: 600 },
+    { ...plan, title: "Too large", sqft: 1100 }, { ...plan, title: "Too few bathrooms", bathrooms: 1.5 },
+    { ...plan, title: "Over budget", rent: 2400 },
+  ] }, markdown: "Published plans", metadata: { statusCode: 200 } });
+  await t.action(internal.discovery.run, { searchId });
+  const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
+  expect(result.listings.map(listing => listing.title)).toEqual(["One bedroom", "Two bedrooms"]);
+});
+
+test("empty criteria and open square-footage bounds are valid", async () => {
+  for (const sqft of [{ weight: "nice" as const }, { min: 500, weight: "nice" as const }, { max: 1000, weight: "nice" as const }]) {
+    const t = convexTest(schema, modules);
+    const userId = await t.run(ctx => ctx.db.insert("users", {}));
+    const preferences = { ...flexiblePreferences, bedrooms: { values: [], weight: "must" as const }, sqft };
+    await expect(t.withIdentity({ subject: userId }).mutation(api.searches.start, { preferences })).resolves.toBeTruthy();
+  }
+});
+
+test("every supported criterion value can be saved", async () => {
+  const t = convexTest(schema, modules);
+  const userId = await t.run(ctx => ctx.db.insert("users", {}));
+  const preferences: Preferences = {
+    ...flexiblePreferences, bedrooms: { values: [0, 1, 2, 3, 4, 5, 6], weight: "must" },
+    bathrooms: { values: [1, 1.5, 2], weight: "want" }, floors: { values: [1, 2, 3], weight: "nice" },
+    leaseMonths: { values: [1, 6, 9, 12], weight: "want" }, pets: { values: ["cat", "dog"], weight: "must" },
+    sqft: { min: 800, max: 800, weight: "nice" },
+    amenities: (["parking", "laundry", "dishwasher", "airConditioning", "balcony", "gym", "pool", "elevator", "furnished"] as const)
+      .map(key => ({ key, weight: "want" })),
+  };
+  const searchId = await t.withIdentity({ subject: userId }).mutation(api.searches.start, { preferences });
+  expect((await t.run(ctx => ctx.db.get(searchId)))?.preferences).toEqual(preferences);
+});
+
+test("discovery reads multiple bedroom values from migrated preferences", async () => {
+  const result = await run([{ ...matching, units: [matchingUnit, { ...matchingUnit, bedrooms: 2 }] }], undefined, false,
+    { bedrooms: { values: [1, 2], weight: "must" } });
+  expect(result.listings.map(listing => listing.bedrooms)).toEqual([1, 2]);
+  expect(result.listings.map(listing => [listing.score, listing.mustMisses])).toEqual([[25, 0], [25, 0]]);
+});
+
+test("discovery does not require a bedroom when that criterion is unused", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, bedrooms: 2 }, { ...matchingUnit, bedrooms: null }] }], undefined, false,
+    { bedrooms: { values: [], weight: "must" } });
+  expect(mocks.search).toHaveBeenCalledWith(expect.anything(), "Named apartment communities in Ann Arbor Michigan with floor plan pages cat friendly", expect.anything());
+  expect(result.listings).toHaveLength(2);
+  for (const listing of result.listings) {
+    expect(listing.score).toBe(20);
+    expect(listing.mustMisses).toBe(0);
+    expect(listing.matches).not.toContain("2 bedrooms");
+    expect(listing.unknowns).not.toContain("Bedrooms not confirmed");
+  }
+});
+
+test("a conflicting bedroom contributes negative points without dropping the unit", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, rent: null, bedrooms: 3 }] }], undefined, false,
+    { bedrooms: { values: [1, 2], weight: "must" }, pets: { values: [], weight: "nice" }, amenities: [] });
+  expect(result.listings).toHaveLength(1);
+  expect(result.listings[0]).toMatchObject({ score: -5, mustMisses: 1 });
+  expect(result.listings[0].unknowns).toContain("1 or 2 bedrooms: conflicts with must-have");
+});
+
+test("an unpublished floor is unconfirmed even when it is a must-have", async () => {
+  const result = await run([matching], undefined, false, { floors: { values: [1], weight: "must" } });
+  expect(result.listings[0]).toMatchObject({ score: 25, mustMisses: 0 });
+  expect(result.listings[0].unknowns).toContain("Floor not confirmed");
+});
+
+test.each([["want", 28], ["nice", 26], ["must", 30]] as const)("confirmed %s amenities add their weight", async (weight, score) => {
+  const result = await run([{ ...matching, dishwasher: true }], undefined, false, {
+    amenities: [{ key: "parking", weight: "must" }, { key: "laundry", weight: "must" }, { key: "dishwasher", weight }],
+  });
+  expect(result.listings[0]).toMatchObject({ score, mustMisses: 0 });
+  expect(result.listings[0].matches).toContain("Dishwasher");
+});
+
+test.each(["parking", "laundry", "dishwasher", "airConditioning", "balcony", "gym", "pool", "elevator", "furnished"] as const)(
+  "an explicitly absent %s amenity subtracts points", async key => {
+    const result = await run([{ ...matching, [key]: false }], undefined, false, { amenities: [{ key, weight: "want" }] });
+    expect(result.listings[0]).toMatchObject({ score: 12, mustMisses: 0 });
+    expect(result.listings[0].unknowns.some(line => line.endsWith(": conflicts with preference"))).toBe(true);
+  });
+
+test("third-or-higher floors and two-or-more bathrooms match higher published values", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, floor: 5, bathrooms: 2.5 }] }], undefined, false,
+    { floors: { values: [3], weight: "must" }, bathrooms: { values: [2], weight: "want" } });
+  expect(result.listings[0]).toMatchObject({ score: 33, mustMisses: 0 });
+  expect(result.listings[0].matches).toEqual(expect.arrayContaining(["Floor 5", "2.5 bathrooms"]));
+});
+
+test("two plans with different square footage retain independent scores", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, sqft: 1000 }, { ...matchingUnit, sqft: 500 }] }], undefined, false,
+    { sqft: { min: 700, max: 1100, weight: "must" } });
+  expect(result.listings.map(listing => [listing.score, listing.mustMisses])).toEqual([[30, 0], [20, 1]]);
+});
+
+test.each([{ min: 700 }, { max: 1100 }])("square footage supports a single bound (%j)", async bounds => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, sqft: 900 }] }], undefined, false, { sqft: { ...bounds, weight: "nice" } });
+  expect(result.listings[0]).toMatchObject({ score: 26, mustMisses: 0 });
+});
+
+test.each([
+  { terms: [6, 12], score: 28, misses: 0 }, { terms: [9], score: 22, misses: 0 },
+  { terms: [], score: 25, misses: 0 }, { terms: null, score: 25, misses: 0 },
+])("lease terms match any selected term and missing terms remain unknown (%j)", async ({ terms, score, misses }) => {
+  const result = await run([{ ...matching, leaseMonths: terms }], undefined, false, { leaseMonths: { values: [1, 12], weight: "want" } });
+  expect(result.listings[0]).toMatchObject({ score, mustMisses: misses });
+});
+
+test.each([
+  { cats: true, dogs: true, score: 25, misses: 0 },
+  { cats: true, dogs: null, score: 20, misses: 0 },
+  { cats: false, dogs: null, score: 15, misses: 1 },
+  { cats: false, dogs: false, score: 15, misses: 1 },
+])("pets count as one criterion requiring every selected animal (%j)", async ({ cats, dogs, score, misses }) => {
+  const result = await run([{ ...matching, cats, dogs }], undefined, false, { pets: { values: ["cat", "dog"], weight: "must" } });
+  expect(result.listings[0]).toMatchObject({ score, mustMisses: misses });
+});
+
+test("unused criteria add no lines or points even when published facts differ", async () => {
+  const result = await run([{ ...matching, cats: false, parking: false, laundry: false, leaseMonths: [9],
+    units: [{ ...matchingUnit, bedrooms: 5, floor: 8, bathrooms: 3, sqft: 400 }] }], undefined, false,
+    { bedrooms: { values: [], weight: "must" }, pets: { values: [], weight: "must" }, amenities: [] });
+  expect(result.listings[0]).toMatchObject({ score: 5, mustMisses: 0,
+    matches: ["Ann Arbor", "Within your rent range"], unknowns: ["Move-in availability and current pricing need confirmation"] });
+});
+
+test("invalid numeric extractions remain unknown instead of conflicting", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, rent: Infinity, bedrooms: NaN, bathrooms: Infinity, floor: 0, sqft: -1 }] }], undefined, false,
+    { bathrooms: { values: [1], weight: "must" }, floors: { values: [1], weight: "must" }, sqft: { min: 500, weight: "must" } });
+  expect(result.listings[0]).toMatchObject({ score: 15, mustMisses: 0 });
+  expect(result.listings[0].unknowns).toEqual(expect.arrayContaining(["Rent not confirmed", "Bedrooms not confirmed", "Bathrooms not confirmed", "Floor not confirmed", "Square footage not confirmed"]));
+});
+
+test.each([
+  { bedrooms: { values: [-1], weight: "must" } }, { bedrooms: { values: [7], weight: "must" } },
+  { bedrooms: { values: [1.5], weight: "must" } }, { bedrooms: { values: [NaN], weight: "must" } },
+  { bathrooms: { values: [3], weight: "nice" } }, { floors: { values: [4], weight: "nice" } },
+  { leaseMonths: { values: [18], weight: "nice" } }, { sqft: { min: 900, max: 500, weight: "nice" } },
+  { sqft: { min: -1, weight: "nice" } }, { sqft: { max: Infinity, weight: "nice" } },
+  { amenities: [{ key: "parking", weight: "must" }, { key: "parking", weight: "want" }] },
+  { minRent: -1 }, { maxRent: 20001 }, { minRent: NaN }, { moveIn: "tomorrow" }, { notes: "x".repeat(501) },
+])("invalid flexible preferences never schedule a paid search (%j)", async patch => {
+  const t = convexTest(schema, modules);
+  const userId = await t.run(ctx => ctx.db.insert("users", {}));
+  await expect(t.withIdentity({ subject: userId }).mutation(api.searches.start, {
+    preferences: { ...flexiblePreferences, ...patch },
+  })).rejects.toThrow("Please check");
+  expect(await t.run(ctx => ctx.db.query("searches").collect())).toHaveLength(0);
+  expect(await t.run(ctx => ctx.db.system.query("_scheduled_functions").collect())).toHaveLength(0);
+  expect((await t.run(ctx => ctx.db.get(userId)))?.preferences).toBeUndefined();
+});
+
 test("search excludes non-sources and directories while allowing RentCafe", async () => {
   await run([matching]);
   expect(mocks.search).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.objectContaining({
     excludeDomains: ["zillow.com", "apartments.com", "realtor.com", "redfin.com", "reddit.com",
       "facebook.com", "yelp.com", "hometogo.com", "tripadvisor.com", "airbnb.com", "vrbo.com",
       "pinterest.com", "homes.com", "trulia.com"],
+  }));
+});
+test("extraction requests unit details and property amenities without guessing missing facts", async () => {
+  await run([matching]);
+  expect(mocks.scrape).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.objectContaining({
+    formats: expect.arrayContaining([expect.objectContaining({ type: "json", schema: expect.objectContaining({
+      properties: expect.objectContaining({
+        units: expect.objectContaining({ items: expect.objectContaining({ properties: expect.objectContaining({
+          bathrooms: { type: ["number", "null"] }, sqft: { type: ["number", "null"] }, floor: { type: ["number", "null"] },
+        }) }) }),
+        dishwasher: { type: ["boolean", "null"] }, airConditioning: { type: ["boolean", "null"] },
+        balcony: { type: ["boolean", "null"] }, gym: { type: ["boolean", "null"] }, pool: { type: ["boolean", "null"] },
+        elevator: { type: ["boolean", "null"] }, furnished: { type: ["boolean", "null"] },
+        leaseMonths: { type: "array", items: { type: "number" } },
+      }),
+    }), prompt: expect.stringContaining("A garden level or a lower level is null, not 1.") })]),
   }));
 });
 test("search describes floor plans without contact terms and extraction still requests the leasing contact", async () => {
@@ -47,13 +416,14 @@ test("search describes floor plans without contact terms and extraction still re
     formats: expect.arrayContaining([expect.objectContaining({ prompt: expect.stringContaining("contactEmail must be the leasing contact published on this page") })]),
   }));
 });
-test("excludes known conflicts and listings outside Ann Arbor", async () => {
+test("keeps preference conflicts but excludes listings outside Ann Arbor", async () => {
   const result = await run([matching, { ...matching, units: [{ ...matchingUnit, rent: 2400 }] }, { ...matching, cats: false },
     { ...matching, units: [{ ...matchingUnit, bedrooms: 2 }] }, { ...matching, city: "Ypsilanti" }]);
-  expect(result.listings).toHaveLength(1);
-  expect(result.listings[0].matches).toContain("Within your rent range");
+  expect(result.listings).toHaveLength(4);
+  expect(result.listings.map(listing => [listing.score, listing.mustMisses])).toEqual([[25, 0], [15, 1], [15, 1], [15, 1]]);
   expect(result.search?.status).toBe("complete");
 });
+
 test("unknown facts are unconfirmed and ungrounded email addresses are discarded", async () => {
   const result = await run([{ ...matching, units: [{ ...matchingUnit, rent: null }], cats: null, contactEmail: "invented@example.com" }]);
   expect(result.listings[0].unknowns).toContain("Rent not confirmed");
@@ -77,45 +447,44 @@ test("a page with five units inserts five listings with shared property facts", 
     pagesWithContent: 1, listingsInserted: 5, unitsExtracted: 5, unitsInserted: 5,
   }));
 });
-test("a page with five units inserts two when three rents exceed the budget", async () => {
+test("a page with five units keeps all five when three rents exceed the budget", async () => {
   const units = [2100, 1000, 2400, 3000, 2000].map((rent, i) => ({ ...matchingUnit, title: `Plan ${i + 1}`, rent }));
   const result = await run([{ ...matching, units }]);
-  expect(result.listings.map(({ title, rent }) => ({ title, rent }))).toEqual([
-    { title: "Plan 2", rent: 1000 }, { title: "Plan 5", rent: 2000 },
-  ]);
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/0", "rent out of range": 3, "bedrooms mismatch": 0,
+  expect(result.listings.map(({ title, rent, bedrooms }) => ({ title, rent, bedrooms }))).toEqual(units);
+  expect(result.listings.map(listing => listing.mustMisses)).toEqual([1, 0, 1, 1, 0]);
+  expect(console.info).toHaveBeenCalledWith("Firecrawl units scored", expect.objectContaining({
+    url: "https://example.com/0", units: 5, withMustMisses: 3,
   }));
-  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 5, unitsInserted: 2 }));
+  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 5, unitsInserted: 5 }));
 });
-test("unit conflicts do not discard other units and each listing has its own unknowns", async () => {
+
+test("unit conflicts keep every unit with independent scores and unknowns", async () => {
   const result = await run([{ ...matching, units: [
     { ...matchingUnit, rent: 700 }, { ...matchingUnit, bedrooms: 2 },
     { title: "Unconfirmed", rent: null, bedrooms: null }, matchingUnit,
   ] }]);
-  expect(result.listings).toHaveLength(2);
-  expect(result.listings[0]).toMatchObject({ title: "Unconfirmed", unknowns: [
+  expect(result.listings.map(listing => [listing.score, listing.mustMisses])).toEqual([[15, 1], [15, 1], [15, 0], [25, 0]]);
+  expect(result.listings[2]).toMatchObject({ title: "Unconfirmed", unknowns: [
     "Move-in availability and current pricing need confirmation", "Rent not confirmed", "Bedrooms not confirmed",
   ] });
-  expect(result.listings[0].rent).toBeUndefined();
-  expect(result.listings[0].bedrooms).toBeUndefined();
-  expect(result.listings[0].matches).not.toContain("Within your rent range");
-  expect(result.listings[0].matches).not.toContain("1 bedrooms");
-  expect(result.listings[1].unknowns).toEqual(["Move-in availability and current pricing need confirmation"]);
-  expect(result.listings[1].matches).toContain("Within your rent range");
-  expect(result.listings[1].matches).toContain("1 bedrooms");
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/0", "rent out of range": 1, "bedrooms mismatch": 1,
+  expect(result.listings[2].rent).toBeUndefined();
+  expect(result.listings[2].bedrooms).toBeUndefined();
+  expect(result.listings[2].matches).not.toContain("Within your rent range");
+  expect(result.listings[2].matches).not.toContain("1 bedrooms");
+  expect(result.listings[3].unknowns).toEqual(["Move-in availability and current pricing need confirmation"]);
+  expect(console.info).toHaveBeenCalledWith("Firecrawl units scored", expect.objectContaining({
+    url: "https://example.com/0", units: 4, withMustMisses: 2,
   }));
 });
-test("logs distinguish rejected pages, empty unit arrays, and fully filtered units", async () => {
+
+test("logs distinguish rejected pages, empty unit arrays, and scored units", async () => {
   const result = await run([
     { ...matching, isListing: false, units: [] }, { ...matching, city: null, units: [] }, { ...matching, city: "Ypsilanti" },
     { ...matching, units: [] }, { ...matching, units: [
       { ...matchingUnit, rent: 2400, bedrooms: 2 }, { ...matchingUnit, bedrooms: 2 },
     ] },
   ]);
-  expect(result.listings).toHaveLength(0);
+  expect(result.listings).toHaveLength(2);
   expect(result.search?.status).toBe("complete");
   for (const [index, reason, value] of [[0, "units empty", 0], [1, "units empty", 0], [2, "city conflict", "Ypsilanti"]] as const) {
     expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
@@ -128,16 +497,18 @@ test("logs distinguish rejected pages, empty unit arrays, and fully filtered uni
   expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
     url: "https://example.com/3", reason: "units empty", value: 0,
   }));
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/4", "rent out of range": 1, "bedrooms mismatch": 1,
+  expect(console.info).toHaveBeenCalledWith("Firecrawl units scored", expect.objectContaining({
+    url: "https://example.com/4", units: 2, withMustMisses: 2,
   }));
-  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 3, unitsInserted: 0 }));
+  expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({ unitsExtracted: 3, unitsInserted: 2 }));
 });
-test("page conflicts exclude every unit", async () => {
+test("page preference conflicts keep every unit while city conflicts still drop", async () => {
   const page = { ...matching, units: [matchingUnit, { ...matchingUnit, title: "Another plan" }] };
   const result = await run([{ ...page, cats: false }, { ...page, parking: false }, { ...page, laundry: false }, { ...page, city: "Ypsilanti" }]);
-  expect(result.listings).toHaveLength(0);
+  expect(result.listings).toHaveLength(6);
+  expect(result.listings.every(listing => listing.score === 15 && listing.mustMisses === 1)).toBe(true);
 });
+
 test("pages with floor plans are kept when isListing is false or null", async () => {
   const result = await run([3, 7, 24].map((count, i) => ({ ...matching, isListing: i === 1 ? null : false,
     units: Array.from({ length: count }, (_, j) => ({ ...matchingUnit, title: `Property ${i} plan ${j}` })),
@@ -170,19 +541,18 @@ test("Ann Arbor and Ann Arbor Charter Township accept case, whitespace, and stat
     expect(listing.unknowns).not.toContain("City not confirmed");
   }
 });
-test("overriding isListing keeps city, rent, and bedroom conflicts excluded", async () => {
+test("overriding isListing keeps rent and bedroom conflicts but excludes another city", async () => {
   const result = await run([{ ...matching, isListing: false, units: [
     { ...matchingUnit, rent: 700 }, { ...matchingUnit, rent: 2400 }, { ...matchingUnit, bedrooms: 2 }, matchingUnit,
   ] }, { ...matching, isListing: null, city: "Ypsilanti" }]);
-  expect(result.listings).toHaveLength(1);
-  expect(result.listings[0]).toMatchObject({ ...matchingUnit, url: "https://example.com/0" });
-  expect(console.info).toHaveBeenCalledWith("Firecrawl unit drops", expect.objectContaining({
-    url: "https://example.com/0", "rent out of range": 2, "bedrooms mismatch": 1,
-  }));
+  expect(result.listings).toHaveLength(4);
+  expect(result.listings.map(listing => listing.mustMisses)).toEqual([1, 1, 1, 0]);
+  expect(console.info).toHaveBeenCalledWith("Firecrawl units scored", expect.objectContaining({ url: "https://example.com/0", units: 4, withMustMisses: 3 }));
   expect(console.info).toHaveBeenCalledWith("Firecrawl page rejected", expect.objectContaining({
     url: "https://example.com/1", reason: "city conflict", value: "Ypsilanti",
   }));
 });
+
 test("missing or invalid unit arrays do not invent a listing", async () => {
   const result = await run([undefined, null, {}, "not units", []].map(units => ({ ...matching, units })));
   expect(result.listings).toHaveLength(0);
@@ -203,9 +573,9 @@ test("stage counts distinguish duplicate URLs, empty pages, conflicts, and inser
   const result = await run([{}, matching, { ...matching, units: [{ ...matchingUnit, rent: 2400 }] }, new Error("Timed out")], [
     "https://example.com/0", "https://example.com/1", "https://example.com/1", "https://example.com/2", "https://example.com/3",
   ]);
-  expect(result.listings).toHaveLength(1);
+  expect(result.listings).toHaveLength(2);
   expect(console.info).toHaveBeenCalledWith("Firecrawl discovery counts", expect.objectContaining({
-    urlsReturned: 5, urlsAfterDeduplication: 4, urlsSelectedForScrape: 4, pagesWithContent: 2, listingsInserted: 1, unitsExtracted: 2, unitsInserted: 1,
+    urlsReturned: 5, urlsAfterDeduplication: 4, urlsSelectedForScrape: 4, pagesWithContent: 2, listingsInserted: 2, unitsExtracted: 2, unitsInserted: 2,
   }));
   expect(vi.mocked(console.info).mock.calls.filter(([message]) => message === "Firecrawl discovery counts")).toHaveLength(1);
   expect(console.info).toHaveBeenCalledWith("Firecrawl page", expect.objectContaining({ url: "https://example.com/0", statusCode: 200 }));
