@@ -7,14 +7,21 @@ with Convex Auth v2, Firecrawl search, and AgentMail inquiries.
 
 ```sh
 npm ci
+npx convex deployment select dev/hosting
 npm run dev:backend
 ```
 
-Choose the existing `apartment-hunter` project and the development deployment
-that contains the service keys. Convex defaults to a personal dev deployment;
-select the shared development deployment with
-`npx convex deployment select affable-chipmunk-297`.
-The CLI writes `.env.local` with the deployment and public frontend URL.
+This `hosting` branch uses the isolated `dev/hosting` deployment
+(`dutiful-basilisk-521`), which has its service keys configured. Selecting it
+writes `.env.local` with the deployment and public frontend URL. Keep the
+backend watcher and frontend running from the same checkout.
+
+The shared `affable-chipmunk-297` deployment may run a different feature branch.
+Its newer weighted preferences schema is incompatible with this branch's form.
+An error about a missing `preferences.amenities` field indicates this mismatch;
+select `dev/hosting`, restart both development commands, and reload the browser.
+Each deployment has separate accounts and data, so create an account when
+using this isolated deployment for the first time.
 
 In a second terminal:
 
