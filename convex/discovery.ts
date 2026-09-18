@@ -8,6 +8,7 @@ const nullable = (type: string) => ({ type: [type, "null"] });
 const unit = {
   type: "object", properties: {
     title: nullable("string"), rent: nullable("number"), bedrooms: nullable("number"),
+    bathrooms: nullable("number"), sqft: nullable("number"), floor: nullable("number"),
   },
 };
 const schema = {
@@ -15,6 +16,10 @@ const schema = {
     isListing: { type: "boolean" }, city: nullable("string"), summary: nullable("string"),
     cats: nullable("boolean"), dogs: nullable("boolean"), parking: nullable("boolean"),
     laundry: nullable("boolean"), contactEmail: nullable("string"),
+    dishwasher: nullable("boolean"), airConditioning: nullable("boolean"),
+    balcony: nullable("boolean"), gym: nullable("boolean"), pool: nullable("boolean"),
+    elevator: nullable("boolean"), furnished: nullable("boolean"),
+    leaseMonths: { type: "array", items: { type: "number" } },
     units: { type: "array", items: unit },
   },
 };
@@ -81,7 +86,7 @@ export const run = internalAction({
       const scrape = async (url: string) => {
         try {
           const page = await firecrawl.scrape(ctx, url, {
-            formats: ["markdown", { type: "json", schema, prompt: "Extract every apartment floor plan offered for rent on this page into the units array, with one entry per floor plan. Include every published floor plan regardless of its rent or bedroom count. Each unit's title must be its published floor plan name; rent and bedrooms must describe that same plan. Do not invent a floor plan or infer one from search criteria. Return an empty units array when no floor plans are stated. Keep city, summary, contactEmail, cats, dogs, parking, and laundry at the property level. Property-specific floor-plan pages are listings; isListing must be false for general city-wide search directories, articles, or pages without a specific rental. Only use explicitly stated facts. city must be the property's actual city name without state or country. rent must be monthly USD for the same unit as bedrooms, not a deposit, per-person price, or price across unrelated units. laundry means in-unit laundry, not a shared laundry room. Use null for unknowns or ambiguous price ranges. contactEmail must be the leasing contact published on this page, never the website support address. Do not guess." }],
+            formats: ["markdown", { type: "json", schema, prompt: "Extract every apartment floor plan offered for rent on this page into the units array, with one entry per floor plan. Include every published floor plan regardless of its rent or bedroom count. Each unit's title must be its published floor plan name; rent and bedrooms must describe that same plan. Do not invent a floor plan or infer one from search criteria. Return an empty units array when no floor plans are stated. Keep city, summary, contactEmail, cats, dogs, parking, and laundry at the property level. Property-specific floor-plan pages are listings; isListing must be false for general city-wide search directories, articles, or pages without a specific rental. Only use explicitly stated facts. city must be the property's actual city name without state or country. rent must be monthly USD for the same unit as bedrooms, not a deposit, per-person price, or price across unrelated units. laundry means in-unit laundry, not a shared laundry room. Use null for unknowns or ambiguous price ranges. contactEmail must be the leasing contact published on this page, never the website support address. Do not guess. bathrooms is the bathroom count for the same floor plan as bedrooms. sqft is the plan's stated interior square footage. If the page states a range, return null. floor is the floor the plan sits on, counting the ground floor as 1. Return null unless the page states it. A garden level or a lower level is null, not 1. leaseMonths holds every lease length in months the property publishes. A month-to-month lease is 1. Return an empty array when no term is stated. Amenity fields are property-level and true only when the page states the property offers it." }],
             onlyMainContent: false, timeout: 45000, maxAge: 3600000,
             proxy: "auto", waitFor: 3000,
           });

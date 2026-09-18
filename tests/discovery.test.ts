@@ -210,6 +210,22 @@ test("search excludes non-sources and directories while allowing RentCafe", asyn
       "pinterest.com", "homes.com", "trulia.com"],
   }));
 });
+test("extraction requests unit details and property amenities without guessing missing facts", async () => {
+  await run([matching]);
+  expect(mocks.scrape).toHaveBeenCalledWith(expect.anything(), expect.any(String), expect.objectContaining({
+    formats: expect.arrayContaining([expect.objectContaining({ type: "json", schema: expect.objectContaining({
+      properties: expect.objectContaining({
+        units: expect.objectContaining({ items: expect.objectContaining({ properties: expect.objectContaining({
+          bathrooms: { type: ["number", "null"] }, sqft: { type: ["number", "null"] }, floor: { type: ["number", "null"] },
+        }) }) }),
+        dishwasher: { type: ["boolean", "null"] }, airConditioning: { type: ["boolean", "null"] },
+        balcony: { type: ["boolean", "null"] }, gym: { type: ["boolean", "null"] }, pool: { type: ["boolean", "null"] },
+        elevator: { type: ["boolean", "null"] }, furnished: { type: ["boolean", "null"] },
+        leaseMonths: { type: "array", items: { type: "number" } },
+      }),
+    }), prompt: expect.stringContaining("A garden level or a lower level is null, not 1.") })]),
+  }));
+});
 test("search describes floor plans without contact terms and extraction still requests the leasing contact", async () => {
   await run([matching]);
   expect(mocks.search).toHaveBeenCalledWith(expect.anything(), expect.stringContaining("Ann Arbor Michigan with 1 bedroom floor plan pages cat friendly"), expect.anything());
