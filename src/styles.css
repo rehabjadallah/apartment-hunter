@@ -87,6 +87,7 @@ dialog::backdrop { background: #23332966; backdrop-filter: blur(4px); }
 .listing-top, .listing-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .listing-top { font-size: 12px; color: #66715f; margin-bottom: 20px; }
 .listing-card h3 { font-size: 22px; line-height: 1.35; }
+.listing-card .complex-name { margin: 4px 0 0; color: #52604d; font-size: 13px; overflow-wrap: anywhere; }
 .listing-card > p { font-size: 14px; line-height: 1.6; color: #66715f; }
 .listing-card .price { font-size: 25px; color: #263c30; font-weight: 600; margin: 12px 0; }
 .price small { font-size: 13px; font-weight: 400; }

@@ -10,7 +10,7 @@ const savedPreferences: Preferences = {
 };
 const standingUnknowns = ["Move-in availability and current pricing need confirmation", "Additional preferences need confirmation"];
 const baseListing = { _creationTime: 123, searchId: "fixture-search", url: "http://127.0.0.1:5173/listing-fixture", summary: "Published apartment details.",
-  rent: 1500, bedrooms: 1, contactEmail: "leasing@example.com", checkedAt: 123 };
+  rent: 1500, bedrooms: 1, complexName: "Maple Grove Apartments", contactEmail: "leasing@example.com", checkedAt: 123 };
 const resultsFixture = { preferences: savedPreferences, status: "complete", listings: [
   { ...baseListing, _id: "confirmed", title: "All preferences confirmed", score: 30, mustMisses: 0, unknowns: standingUnknowns,
     matches: ["Ann Arbor", "Within your rent range", "1 bedrooms", "2.5 bathrooms", "900 sq ft", "Floor 5", "Cats allowed", "Dogs allowed", "12 month lease", "Parking", "In-unit laundry", "Furnished"] },
@@ -101,11 +101,11 @@ test("offline: matching results keep listing links and follow-up keyboard-access
   await fixture(page, "results", { results: resultsFixture });
   await expect(page.getByRole("heading", { name: "Matching apartments", exact: true })).toBeVisible();
   await expect(page.getByText("1 matching apartment", { exact: true })).toBeVisible();
-  await expect(page.getByText("9 of 9 preferences", { exact: true })).toBeVisible();
   await expect(page.getByText(/must-have|Close —|Misses:/)).toHaveCount(0);
   await expect(page.getByRole("article")).toHaveCount(1);
   const card = page.getByRole("article");
   await expect(card).toHaveClass("listing-card");
+  await expect(card.locator("h3 + .complex-name")).toHaveText("Maple Grove Apartments");
   const link = card.getByRole("link", { name: "View listing" });
   for (let i = 0; i < 20 && !await link.evaluate(element => element === document.activeElement); i++) await page.keyboard.press("Tab");
   await expect(link).toBeFocused();

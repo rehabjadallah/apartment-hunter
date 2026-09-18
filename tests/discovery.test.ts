@@ -36,6 +36,22 @@ async function run(documents: Array<Record<string, unknown> | Error>, urls = doc
 const matchingUnit = { title: "One bedroom", rent: 1500, bedrooms: 1 };
 const matching = { isListing: true, city: "Ann Arbor", summary: "Apartments near downtown.", cats: true, parking: true, laundry: true, contactEmail: "leasing@example.com", units: [matchingUnit] };
 
+test("published complex names are shared by plans without replacing their model names", async () => {
+  mocks.scrape.mockResolvedValueOnce({ json: { ...matching, complexName: "  Maple Grove Apartments  ",
+    units: [{ ...matchingUnit, title: "The Oak" }, { ...matchingUnit, title: "The Elm" }] },
+    markdown: "# Maple Grove Apartments\nThe Oak and The Elm floor plans." });
+  const result = await run([matching]);
+  expect(result.listings.map(({ title, complexName }) => ({ title, complexName }))).toEqual([
+    { title: "The Oak", complexName: "Maple Grove Apartments" }, { title: "The Elm", complexName: "Maple Grove Apartments" },
+  ]);
+});
+
+test.each([null, "", "   ", 42, "Invented Apartments"])("unconfirmed complex names are omitted (%j)", async complexName => {
+  const result = await run([{ ...matching, complexName }]);
+  expect(result.listings).toHaveLength(1);
+  expect(result.listings[0]).not.toHaveProperty("complexName");
+});
+
 const flexiblePreferences = {
   city: "Ann Arbor, Michigan" as const, minRent: 800, maxRent: 2000, moveIn: "2026-11-01", notes: "",
   bedrooms: { values: [1, 2], weight: "must" as const }, bathrooms: { values: [], weight: "nice" as const },

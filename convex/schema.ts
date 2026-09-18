@@ -23,7 +23,7 @@ export default defineSchema({
     error: v.optional(v.string()),
   }).index("by_user", ["userId"]),
   listings: defineTable({
-    searchId: v.id("searches"), title: v.string(), url: v.string(),
+    searchId: v.id("searches"), title: v.string(), complexName: v.optional(v.string()), url: v.string(),
     summary: v.string(), rent: v.optional(v.number()), bedrooms: v.optional(v.number()),
     contactEmail: v.optional(v.string()), matches: v.array(v.string()),
     unknowns: v.array(v.string()), checkedAt: v.number(), score: v.number(), mustMisses: v.number(),
