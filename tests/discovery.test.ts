@@ -1,8 +1,11 @@
 import { convexTest } from "convex-test";
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
+import { defineSchema, defineTable } from "convex/server";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import schema from "../convex/schema";
-import { internal } from "../convex/_generated/api";
+import { migrationPreferences } from "../convex/migrations";
+import type { Preferences } from "../convex/schema";
+import { api, internal } from "../convex/_generated/api";
 
 const mocks = vi.hoisted(() => ({ search: vi.fn(), scrape: vi.fn() }));
 vi.mock("@firecrawl/firecrawl-convex", () => ({ FirecrawlClient: class { search = mocks.search; scrape = mocks.scrape; } }));
@@ -10,13 +13,14 @@ const modules = import.meta.glob("../convex/**/*.ts");
 beforeEach(() => { vi.clearAllMocks(); vi.spyOn(console, "info").mockImplementation(() => {}); vi.spyOn(console, "error").mockImplementation(() => {}); });
 afterEach(() => { vi.restoreAllMocks(); });
 
-async function run(documents: Array<Record<string, unknown> | Error>, urls = documents.map((_, i) => `https://example.com/${i}`), timeoutDuringScrape = false) {
+async function run(documents: Array<Record<string, unknown> | Error>, urls = documents.map((_, i) => `https://example.com/${i}`), timeoutDuringScrape = false, criteria: Partial<Preferences> = {}) {
   const t = convexTest(schema, modules);
   const searchId = await t.run(async ctx => {
     const userId = await ctx.db.insert("users", {});
     return ctx.db.insert("searches", { userId, status: "searching", preferences: {
-      city: "Ann Arbor, Michigan", minRent: 800, maxRent: 2000, bedrooms: 1, pets: "cat",
-      moveIn: "2026-11-01", parking: true, laundry: true, notes: "", } });
+      ...flexiblePreferences, bedrooms: { values: [1], weight: "must" }, pets: { values: ["cat"], weight: "must" },
+      amenities: [{ key: "parking", weight: "must" }, { key: "laundry", weight: "must" }], ...criteria,
+    } });
   });
   mocks.search.mockResolvedValue({ web: urls.map(url => ({ url })) });
   mocks.scrape.mockImplementation(async (_ctx, url: string) => {
@@ -30,6 +34,173 @@ async function run(documents: Array<Record<string, unknown> | Error>, urls = doc
 }
 const matchingUnit = { title: "One bedroom", rent: 1500, bedrooms: 1 };
 const matching = { isListing: true, city: "Ann Arbor", summary: "Apartments near downtown.", cats: true, parking: true, laundry: true, contactEmail: "leasing@example.com", units: [matchingUnit] };
+
+const flexiblePreferences = {
+  city: "Ann Arbor, Michigan" as const, minRent: 800, maxRent: 2000, moveIn: "2026-11-01", notes: "",
+  bedrooms: { values: [1, 2], weight: "must" as const }, bathrooms: { values: [], weight: "nice" as const },
+  floors: { values: [], weight: "nice" as const }, leaseMonths: { values: [], weight: "nice" as const },
+  sqft: { weight: "nice" as const }, pets: { values: [], weight: "nice" as const }, amenities: [],
+};
+
+const migrationSchema = defineSchema({
+  ...schema.tables,
+  users: defineTable({ ...schema.tables.users.validator.fields, preferences: v.optional(migrationPreferences) }),
+  searches: defineTable({ ...schema.tables.searches.validator.fields, preferences: migrationPreferences }).index("by_user", ["userId"]),
+  listings: defineTable({ ...schema.tables.listings.validator.fields, score: v.optional(v.number()), mustMisses: v.optional(v.number()) }).index("by_search", ["searchId"]),
+});
+const oldPreferences = { city: "Ann Arbor, Michigan" as const, minRent: 800, maxRent: 2000,
+  bedrooms: 2, pets: "cat" as const, parking: true, laundry: true, moveIn: "2026-11-01", notes: "Keep these notes" };
+
+test("migration preserves saved data, backfills only recorded facts, and can run twice", async () => {
+  const t = convexTest(migrationSchema, modules);
+  const ids = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", { name: "Alex", inboxId: "existing-inbox", preferences: oldPreferences });
+    const emptyUserId = await ctx.db.insert("users", {});
+    const modernUserId = await ctx.db.insert("users", { preferences: flexiblePreferences });
+    const searchId = await ctx.db.insert("searches", { userId, status: "complete", preferences: oldPreferences });
+    const base = { searchId, title: "Saved apartment", url: "https://example.com/old", summary: "Published facts", checkedAt: 123, contactEmail: "leasing@example.com" };
+    const listingId = await ctx.db.insert("listings", { ...base, rent: 1600, bedrooms: 2,
+      matches: ["Ann Arbor", "Within your rent range", "2 bedrooms", "Cats allowed", "Parking"], unknowns: ["In-unit laundry: not confirmed"] });
+    const unknownId = await ctx.db.insert("listings", { ...base, matches: [], unknowns: ["Rent not confirmed", "Bedrooms not confirmed"] });
+    const conflictId = await ctx.db.insert("listings", { ...base, rent: 2100, bedrooms: 3, matches: [], unknowns: [] });
+    const scoredId = await ctx.db.insert("listings", { ...base, matches: [], unknowns: [], score: 42, mustMisses: 2 });
+    return { userId, emptyUserId, modernUserId, searchId, listingId, unknownId, conflictId, scoredId };
+  });
+  const before = await t.run(async ctx => ({ listing: await ctx.db.get(ids.listingId), search: await ctx.db.get(ids.searchId) }));
+  expect(await t.mutation(internal.migrations.flexibleFilters, {})).toEqual({ users: 1, searches: 1, listings: 3, checked: { users: 3, searches: 1, listings: 4 } });
+  const expected = { ...flexiblePreferences, bedrooms: { values: [2], weight: "must" }, notes: "Keep these notes",
+    pets: { values: ["cat"], weight: "must" }, amenities: [{ key: "parking", weight: "must" }, { key: "laundry", weight: "must" }] };
+  const after = await t.run(async ctx => ({ user: await ctx.db.get(ids.userId), search: await ctx.db.get(ids.searchId),
+    listing: await ctx.db.get(ids.listingId), unknown: await ctx.db.get(ids.unknownId), conflict: await ctx.db.get(ids.conflictId) }));
+  expect(after.user).toMatchObject({ name: "Alex", inboxId: "existing-inbox", preferences: expected });
+  expect(after.search).toEqual({ ...before.search, preferences: expected });
+  expect(after.listing).toEqual({ ...before.listing, score: 20, mustMisses: 0 });
+  expect(after.unknown).toMatchObject({ score: 0, mustMisses: 0 });
+  expect(after.conflict).toMatchObject({ score: -10, mustMisses: 2 });
+  expect((await t.run(ctx => ctx.db.get(ids.emptyUserId)))?.preferences).toBeUndefined();
+  expect((await t.run(ctx => ctx.db.get(ids.modernUserId)))?.preferences).toEqual(flexiblePreferences);
+  expect(await t.run(ctx => ctx.db.get(ids.scoredId))).toMatchObject({ score: 42, mustMisses: 2 });
+  expect(await t.mutation(internal.migrations.flexibleFilters, {})).toEqual({ users: 0, searches: 0, listings: 0, checked: { users: 3, searches: 1, listings: 4 } });
+});
+
+test.each(["none", "dog"] as const)("migration handles %s pets and unselected amenities", async pets => {
+  const t = convexTest(migrationSchema, modules);
+  const userId = await t.run(ctx => ctx.db.insert("users", { preferences: { ...oldPreferences, pets, parking: false, laundry: false } }));
+  await t.mutation(internal.migrations.flexibleFilters, {});
+  const preferences = (await t.run(ctx => ctx.db.get(userId)))?.preferences;
+  expect(preferences?.pets).toEqual({ values: pets === "none" ? [] : ["dog"], weight: pets === "none" ? "nice" : "must" });
+  expect(preferences?.amenities).toEqual([]);
+  expect(preferences).not.toHaveProperty("parking");
+  expect(preferences).not.toHaveProperty("laundry");
+});
+
+test("migration rolls back instead of guessing missing original preferences", async () => {
+  const t = convexTest(migrationSchema, modules);
+  const ids = await t.run(async ctx => [await ctx.db.insert("users", { preferences: oldPreferences }),
+    await ctx.db.insert("users", { preferences: { bedrooms: 2 } })]);
+  await expect(t.mutation(internal.migrations.flexibleFilters, {})).rejects.toThrow("Cannot migrate incomplete preferences");
+  expect((await t.run(ctx => ctx.db.get(ids[0])))?.preferences).toEqual(oldPreferences);
+});
+
+test("migration refuses oversized datasets before changing any row", async () => {
+  const t = convexTest(migrationSchema, modules);
+  const userId = await t.run(async ctx => {
+    const first = await ctx.db.insert("users", { preferences: oldPreferences });
+    for (let i = 0; i < 2000; i++) await ctx.db.insert("users", {});
+    return first;
+  });
+  await expect(t.mutation(internal.migrations.flexibleFilters, {})).rejects.toThrow("exceeds 2000 rows");
+  expect((await t.run(ctx => ctx.db.get(userId)))?.preferences).toEqual(oldPreferences);
+});
+
+test("migration rolls back if a historical listing has no saved search", async () => {
+  const t = convexTest(migrationSchema, modules);
+  const userId = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", { preferences: oldPreferences });
+    const searchId = await ctx.db.insert("searches", { userId, preferences: oldPreferences, status: "complete" });
+    await ctx.db.insert("listings", { searchId, title: "Orphan", url: "https://example.com/old", summary: "", matches: [], unknowns: [], checkedAt: 123 });
+    await ctx.db.delete(searchId);
+    return userId;
+  });
+  await expect(t.mutation(internal.migrations.flexibleFilters, {})).rejects.toThrow("without its saved search");
+  expect((await t.run(ctx => ctx.db.get(userId)))?.preferences).toEqual(oldPreferences);
+});
+
+test("flexible preferences accept multiple selections and schedule just one search", async () => {
+  const t = convexTest(schema, modules);
+  const userId = await t.run(ctx => ctx.db.insert("users", {}));
+  const client = t.withIdentity({ subject: userId });
+  const searchId = await client.mutation(api.searches.start, { preferences: flexiblePreferences });
+  expect((await t.run(ctx => ctx.db.get(searchId)))?.preferences).toEqual(flexiblePreferences);
+  expect((await t.run(ctx => ctx.db.get(userId)))?.preferences).toEqual(flexiblePreferences);
+  expect(await t.run(ctx => ctx.db.query("searches").collect())).toHaveLength(1);
+  const scheduled = await t.run(ctx => ctx.db.system.query("_scheduled_functions").collect());
+  expect(scheduled.filter(task => task.name === "discovery:run")).toHaveLength(1);
+  await expect(client.mutation(api.searches.start, { preferences: flexiblePreferences })).rejects.toThrow("Please wait a minute");
+  expect(await t.run(ctx => ctx.db.query("searches").collect())).toHaveLength(1);
+});
+
+test("empty criteria and open square-footage bounds are valid", async () => {
+  for (const sqft of [{ weight: "nice" as const }, { min: 500, weight: "nice" as const }, { max: 1000, weight: "nice" as const }]) {
+    const t = convexTest(schema, modules);
+    const userId = await t.run(ctx => ctx.db.insert("users", {}));
+    const preferences = { ...flexiblePreferences, bedrooms: { values: [], weight: "must" as const }, sqft };
+    await expect(t.withIdentity({ subject: userId }).mutation(api.searches.start, { preferences })).resolves.toBeTruthy();
+  }
+});
+
+test("every supported criterion value can be saved", async () => {
+  const t = convexTest(schema, modules);
+  const userId = await t.run(ctx => ctx.db.insert("users", {}));
+  const preferences: Preferences = {
+    ...flexiblePreferences, bedrooms: { values: [0, 1, 2, 3, 4, 5, 6], weight: "must" },
+    bathrooms: { values: [1, 1.5, 2], weight: "want" }, floors: { values: [1, 2, 3], weight: "nice" },
+    leaseMonths: { values: [1, 6, 9, 12], weight: "want" }, pets: { values: ["cat", "dog"], weight: "must" },
+    sqft: { min: 800, max: 800, weight: "nice" },
+    amenities: (["parking", "laundry", "dishwasher", "airConditioning", "balcony", "gym", "pool", "elevator", "furnished"] as const)
+      .map(key => ({ key, weight: "want" })),
+  };
+  const searchId = await t.withIdentity({ subject: userId }).mutation(api.searches.start, { preferences });
+  expect((await t.run(ctx => ctx.db.get(searchId)))?.preferences).toEqual(preferences);
+});
+
+test("discovery reads multiple bedroom values from migrated preferences", async () => {
+  const result = await run([{ ...matching, units: [matchingUnit, { ...matchingUnit, bedrooms: 2 }] }], undefined, false,
+    { bedrooms: { values: [1, 2], weight: "must" } });
+  expect(result.listings.map(listing => listing.bedrooms)).toEqual([1, 2]);
+  expect(result.listings.map(listing => [listing.score, listing.mustMisses])).toEqual([[25, 0], [25, 0]]);
+});
+
+test("discovery does not require a bedroom when that criterion is unused", async () => {
+  const result = await run([{ ...matching, units: [{ ...matchingUnit, bedrooms: 2 }, { ...matchingUnit, bedrooms: null }] }], undefined, false,
+    { bedrooms: { values: [], weight: "must" } });
+  expect(result.listings).toHaveLength(2);
+  for (const listing of result.listings) {
+    expect(listing.score).toBe(20);
+    expect(listing.mustMisses).toBe(0);
+    expect(listing.matches).not.toContain("2 bedrooms");
+    expect(listing.unknowns).not.toContain("Bedrooms not confirmed");
+  }
+});
+
+test.each([
+  { bedrooms: { values: [-1], weight: "must" } }, { bedrooms: { values: [7], weight: "must" } },
+  { bedrooms: { values: [1.5], weight: "must" } }, { bedrooms: { values: [NaN], weight: "must" } },
+  { bathrooms: { values: [3], weight: "nice" } }, { floors: { values: [4], weight: "nice" } },
+  { leaseMonths: { values: [18], weight: "nice" } }, { sqft: { min: 900, max: 500, weight: "nice" } },
+  { sqft: { min: -1, weight: "nice" } }, { sqft: { max: Infinity, weight: "nice" } },
+  { amenities: [{ key: "parking", weight: "must" }, { key: "parking", weight: "want" }] },
+  { minRent: -1 }, { maxRent: 20001 }, { minRent: NaN }, { moveIn: "tomorrow" }, { notes: "x".repeat(501) },
+])("invalid flexible preferences never schedule a paid search (%j)", async patch => {
+  const t = convexTest(schema, modules);
+  const userId = await t.run(ctx => ctx.db.insert("users", {}));
+  await expect(t.withIdentity({ subject: userId }).mutation(api.searches.start, {
+    preferences: { ...flexiblePreferences, ...patch },
+  })).rejects.toThrow("Please check");
+  expect(await t.run(ctx => ctx.db.query("searches").collect())).toHaveLength(0);
+  expect(await t.run(ctx => ctx.db.system.query("_scheduled_functions").collect())).toHaveLength(0);
+  expect((await t.run(ctx => ctx.db.get(userId)))?.preferences).toBeUndefined();
+});
 
 test("search excludes non-sources and directories while allowing RentCafe", async () => {
   await run([matching]);

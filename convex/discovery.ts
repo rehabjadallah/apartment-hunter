@@ -51,12 +51,13 @@ export const run = internalAction({
     const search = await ctx.runQuery(internal.searches.get, { searchId });
     if (!search || search.status !== "searching") return;
     const p = search.preferences;
+    const queryBedrooms = p.bedrooms.values[0] ?? 1; const queryPet = p.pets.values.length ? p.pets.values[0] : "none";
     const counts = { urlsReturned: 0, urlsAfterDeduplication: 0, urlsSelectedForScrape: 0,
       pagesWithContent: 0, listingsInserted: 0, unitsExtracted: 0, unitsInserted: 0 };
     let error: string | undefined;
     try {
       const response = await firecrawl.search(ctx,
-        `Named apartment communities in Ann Arbor Michigan with ${p.bedrooms === 0 ? "studio" : `${p.bedrooms} bedroom`} floor plan pages ${p.pets === "none" ? "" : `${p.pets} friendly`}`,
+        `Named apartment communities in Ann Arbor Michigan with ${queryBedrooms === 0 ? "studio" : `${queryBedrooms} bedroom`} floor plan pages ${queryPet === "none" ? "" : `${queryPet} friendly`}`,
         { limit: 20, location: "Ann Arbor, Michigan, United States", sources: ["web"],
           excludeDomains: ["zillow.com", "apartments.com", "realtor.com", "redfin.com", "reddit.com",
             "facebook.com", "yelp.com", "hometogo.com", "tripadvisor.com", "airbnb.com", "vrbo.com",
@@ -100,7 +101,8 @@ export const run = internalAction({
             console.info("Firecrawl page rejected", { searchId, url, reason: "city conflict", value: d.city });
             return;
           }
-          if ((p.pets === "cat" && d.cats === false) || (p.pets === "dog" && d.dogs === false) || (p.parking && d.parking === false) || (p.laundry && d.laundry === false)) return;
+          if ((p.pets.values.includes("cat") && d.cats === false) || (p.pets.values.includes("dog") && d.dogs === false) ||
+            (p.amenities.some(item => item.key === "parking") && d.parking === false) || (p.amenities.some(item => item.key === "laundry") && d.laundry === false)) return;
           const email = typeof d.contactEmail === "string" ? d.contactEmail.trim() : "";
           const contactEmail = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email) && page.markdown?.toLowerCase().includes(email.toLowerCase()) ? email : undefined;
           const drops = { "rent out of range": 0, "bedrooms mismatch": 0 };
@@ -110,15 +112,17 @@ export const run = internalAction({
             const rent = typeof u.rent === "number" && u.rent >= 0 ? u.rent : undefined;
             const bedrooms = typeof u.bedrooms === "number" && u.bedrooms >= 0 ? u.bedrooms : undefined;
             if (rent !== undefined && (rent < p.minRent || rent > p.maxRent)) { drops["rent out of range"]++; continue; }
-            if (bedrooms !== undefined && bedrooms !== p.bedrooms) { drops["bedrooms mismatch"]++; continue; }
+            if (bedrooms !== undefined && p.bedrooms.values.length && !p.bedrooms.values.includes(bedrooms)) { drops["bedrooms mismatch"]++; continue; }
             const matches = city === undefined ? [] : ["Ann Arbor"];
             const unknowns = ["Move-in availability and current pricing need confirmation"];
             if (city === undefined) unknowns.push("City not confirmed");
             if (rent === undefined) unknowns.push("Rent not confirmed"); else matches.push("Within your rent range");
-            if (bedrooms === undefined) unknowns.push("Bedrooms not confirmed"); else matches.push(`${bedrooms === 0 ? "Studio" : `${bedrooms} bedrooms`}`);
+            if (p.bedrooms.values.length) {
+              if (bedrooms === undefined) unknowns.push("Bedrooms not confirmed"); else matches.push(`${bedrooms === 0 ? "Studio" : `${bedrooms} bedrooms`}`);
+            }
             for (const [needed, value, label] of [
-              [p.pets === "cat", d.cats, "Cats allowed"], [p.pets === "dog", d.dogs, "Dogs allowed"],
-              [p.parking, d.parking, "Parking"], [p.laundry, d.laundry, "In-unit laundry"],
+              [p.pets.values.includes("cat"), d.cats, "Cats allowed"], [p.pets.values.includes("dog"), d.dogs, "Dogs allowed"],
+              [p.amenities.some(item => item.key === "parking"), d.parking, "Parking"], [p.amenities.some(item => item.key === "laundry"), d.laundry, "In-unit laundry"],
             ] as const) {
               if (needed) (value === true ? matches : unknowns).push(value === true ? label : `${label}: not confirmed`);
             }

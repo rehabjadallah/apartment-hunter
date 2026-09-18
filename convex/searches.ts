@@ -1,17 +1,24 @@
 import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { preferences } from "./schema";
+import { preferences, type Preferences } from "./schema";
+import type { Doc } from "./_generated/dataModel";
 import { requireUser } from "./users";
 
 export const start = mutation({
   args: { preferences },
+  returns: v.id("searches"),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
     const p = args.preferences;
-    if (![p.minRent, p.maxRent, p.bedrooms].every(Number.isFinite) ||
+    if (![p.minRent, p.maxRent].every(Number.isFinite) ||
       p.minRent < 0 || p.maxRent < p.minRent || p.maxRent > 20000 ||
-      !Number.isInteger(p.bedrooms) || p.bedrooms < 0 || p.bedrooms > 6 || p.notes.length > 500 ||
+      p.bedrooms.values.some(value => !Number.isInteger(value) || value < 0 || value > 6) ||
+      p.bathrooms.values.some(value => ![1, 1.5, 2].includes(value)) || p.floors.values.some(value => ![1, 2, 3].includes(value)) ||
+      p.leaseMonths.values.some(value => ![1, 6, 9, 12].includes(value)) ||
+      [p.sqft.min, p.sqft.max].some(value => value !== undefined && (!Number.isFinite(value) || value < 0)) ||
+      (p.sqft.min !== undefined && p.sqft.max !== undefined && p.sqft.max < p.sqft.min) ||
+      new Set(p.amenities.map(item => item.key)).size !== p.amenities.length || p.notes.length > 500 ||
       !/^\d{4}-\d{2}-\d{2}$/.test(p.moveIn) || !Number.isFinite(Date.parse(p.moveIn))) {
       throw new ConvexError("Please check your budget, bedrooms, and move-in date.");
     }
@@ -64,7 +71,30 @@ export const addListing = internalMutation({
     rent: v.optional(v.number()), bedrooms: v.optional(v.number()), contactEmail: v.optional(v.string()),
     matches: v.array(v.string()), unknowns: v.array(v.string()),
   },
+  returns: v.null(),
   handler: async (ctx, args) => {
-    if ((await ctx.db.get(args.searchId))?.status === "searching") await ctx.db.insert("listings", { ...args, checkedAt: Date.now() });
+    const search = await ctx.db.get(args.searchId);
+    if (search?.status === "searching") await ctx.db.insert("listings", {
+      ...args, ...recordedListingScore(search.preferences, args), checkedAt: Date.now(),
+    });
+    return null;
   },
 });
+
+// Historical rows retain numeric facts and confirmed labels, not the original extraction.
+export function recordedListingScore(p: Preferences, listing: Pick<Doc<"listings">, "rent" | "bedrooms" | "matches">) {
+  let score = 0; let mustMisses = 0;
+  const points = { must: 5, want: 3, nice: 1 };
+  const add = (weight: Preferences["bedrooms"]["weight"], confirmed: boolean | undefined) => {
+    if (confirmed === undefined) return;
+    score += confirmed ? points[weight] : -points[weight];
+    if (!confirmed && weight === "must") mustMisses++;
+  };
+  add("must", listing.rent === undefined ? undefined : listing.rent >= p.minRent && listing.rent <= p.maxRent);
+  if (p.bedrooms.values.length) add(p.bedrooms.weight, listing.bedrooms === undefined ? undefined : p.bedrooms.values.includes(listing.bedrooms));
+  if (p.pets.values.length) add(p.pets.weight, p.pets.values.every(pet => listing.matches.includes(pet === "cat" ? "Cats allowed" : "Dogs allowed")) ? true : undefined);
+  const labels = { parking: "Parking", laundry: "In-unit laundry", dishwasher: "Dishwasher", airConditioning: "Air conditioning",
+    balcony: "Balcony", gym: "Gym", pool: "Pool", elevator: "Elevator", furnished: "Furnished" };
+  for (const amenity of p.amenities) add(amenity.weight, listing.matches.includes(labels[amenity.key]) ? true : undefined);
+  return { score, mustMisses };
+}
