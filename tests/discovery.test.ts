@@ -140,6 +140,29 @@ test("flexible preferences accept multiple selections and schedule just one sear
   expect(await t.run(ctx => ctx.db.query("searches").collect())).toHaveLength(1);
 });
 
+test("results sort by must misses, score, then rent and cap only the missing-must group", async () => {
+  const t = convexTest(schema, modules);
+  const { userId, searchId } = await t.run(async ctx => {
+    const userId = await ctx.db.insert("users", {});
+    const searchId = await ctx.db.insert("searches", { userId, preferences: flexiblePreferences, status: "complete" });
+    const rows = [
+      { title: "Two misses", mustMisses: 2, score: 100, rent: 500 },
+      { title: "Low score", mustMisses: 0, score: 1, rent: 500 },
+      { title: "Unknown rent", mustMisses: 0, score: 10 },
+      { title: "Higher rent", mustMisses: 0, score: 10, rent: 1700 },
+      { title: "Lower rent", mustMisses: 0, score: 10, rent: 1100 },
+      ...Array.from({ length: 22 }, (_, i) => ({ title: `One miss ${i}`, mustMisses: 1, score: 30 - i, rent: 1000 })),
+    ];
+    for (const row of rows) await ctx.db.insert("listings", { ...row, searchId, url: "https://example.com/plan", summary: "", matches: [], unknowns: [], checkedAt: 123 });
+    return { userId, searchId };
+  });
+  const result = await t.withIdentity({ subject: userId }).query(api.searches.results, { searchId });
+  expect(result.listings.slice(0, 4).map(listing => listing.title)).toEqual(["Lower rent", "Higher rent", "Unknown rent", "Low score"]);
+  expect(result.listings.slice(4).map(listing => listing.title)).toEqual(Array.from({ length: 20 }, (_, i) => `One miss ${i}`));
+  expect(result.omittedMustMisses).toBe(3);
+  expect(await t.run(ctx => ctx.db.query("listings").collect())).toHaveLength(27);
+});
+
 test("empty criteria and open square-footage bounds are valid", async () => {
   for (const sqft of [{ weight: "nice" as const }, { min: 500, weight: "nice" as const }, { max: 1000, weight: "nice" as const }]) {
     const t = convexTest(schema, modules);

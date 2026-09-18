@@ -4,12 +4,27 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import type { Doc, Id } from "../convex/_generated/dataModel";
-import Preferences from "./Preferences";
+import Preferences, { amenityLabels } from "./Preferences";
 import Modal from "./Modal";
 import PasswordSettings from "./PasswordSettings";
 import NamePrompt from "./NamePrompt";
 
 const money = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+const standingUnknowns = new Set(["Move-in availability and current pricing need confirmation", "Additional preferences need confirmation"]);
+
+function preferenceCount(p: Doc<"searches">["preferences"], listing: Doc<"listings">) {
+  const matches = listing.matches;
+  const criteria = [
+    [p.bedrooms.values.length > 0, matches.some(line => line === "Studio" || /^\d+ bedrooms$/.test(line))],
+    [p.bathrooms.values.length > 0, matches.some(line => line.endsWith(" bathrooms"))],
+    [p.sqft.min !== undefined || p.sqft.max !== undefined, matches.some(line => line.endsWith(" sq ft"))],
+    [p.floors.values.length > 0, matches.some(line => line.startsWith("Floor "))],
+    [p.pets.values.length > 0, p.pets.values.every(pet => matches.includes(pet === "cat" ? "Cats allowed" : "Dogs allowed"))],
+    [p.leaseMonths.values.length > 0, matches.some(line => line.endsWith(" month lease"))],
+    ...p.amenities.map(amenity => [true, matches.includes(amenityLabels[amenity.key])]),
+  ].filter(([selected]) => selected);
+  return `${criteria.filter(([, confirmed]) => confirmed).length} of ${criteria.length} preferences`;
+}
 
 export default function Dashboard() {
   const user = useQuery(api.users.current);
@@ -38,18 +53,26 @@ export default function Dashboard() {
   </>;
 }
 
-function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent: () => void }) {
+export function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent: () => void }) {
   const results = useQuery(api.searches.results, { searchId });
   const [contact, setContact] = useState<Doc<"listings"> | null>(null);
   if (!results) return <p role="status">Loading apartments…</p>;
+  const groups = [
+    { heading: "Has everything you asked for", listings: results.listings.filter(listing => listing.mustMisses === 0 && listing.unknowns.every(line => standingUnknowns.has(line))) },
+    { heading: "Close — a few details to confirm", listings: results.listings.filter(listing => listing.mustMisses === 0 && listing.unknowns.some(line => !standingUnknowns.has(line))) },
+    { heading: "Missing something you marked must-have", listings: results.listings.filter(listing => listing.mustMisses > 0) },
+  ];
   return <>
     {results.status === "searching" && <div className="search-progress" role="status"><span className="spinner" /><div><strong>Looking around Ann Arbor…</strong><p>Finding listings and checking the details. Results will appear here as they're ready.</p></div></div>}
     {results.error && <p role="alert" className="error">{results.error}</p>}
     {results.status === "complete" && !results.listings.length && <section className="empty panel"><h2>No suitable listings in this batch.</h2><p>We checked a small set of web results. Try another search or a wider budget.</p></section>}
-    {results.listings.length > 0 && <p className="muted">{results.listings.length} potential {results.listings.length === 1 ? "match" : "matches"} · Confirm availability and details with the property.</p>}
-    <div className="listing-grid">{results.listings.map(listing => <article className="listing-card" key={listing._id}>
+    {results.listings.length > 0 && <p className="muted" role="status">{groups[0].listings.length + groups[1].listings.length} matches · {groups[2].listings.length + results.omittedMustMisses} missing a must-have</p>}
+    {groups.filter(group => group.listings.length > 0).map(group => <section className="listing-group" key={group.heading}><h2>{group.heading}</h2>
+    <div className="listing-grid">{group.listings.map(listing => <article className={`listing-card${listing.mustMisses > 0 ? " listing-card--miss" : ""}`} key={listing._id}>
       <div className="listing-top"><span>Ann Arbor</span><span>{listing.bedrooms === undefined ? "Beds unconfirmed" : listing.bedrooms === 0 ? "Studio" : `${listing.bedrooms} bed`}</span></div>
-      <h2>{listing.title}</h2><p className="price">{listing.rent === undefined ? "Ask about pricing" : <>{money(listing.rent)} <small>/ month</small></>}</p>
+      <h3>{listing.title}</h3><div className="price-row"><p className="price">{listing.rent === undefined ? "Ask about pricing" : <>{money(listing.rent)} <small>/ month</small></>}</p>
+        <span className="preference-count">{preferenceCount(results.preferences, listing)}</span></div>
+      {listing.mustMisses > 0 && <p className="misses">Misses: {listing.unknowns.filter(line => line.endsWith(": conflicts with must-have")).map(line => line.replace(": conflicts with must-have", "").toLowerCase()).join(", ")}</p>}
       <p>{listing.summary}</p><div className="match-tags">{listing.matches.map(m => <span key={m}>{m}</span>)}</div>
       <details><summary>Details to confirm ({listing.unknowns.length})</summary><ul>{listing.unknowns.map(u => <li key={u}>{u}</li>)}</ul></details>
       <div className="listing-actions"><a href={listing.url} target="_blank" rel="noopener noreferrer">View listing ↗</a>
@@ -58,7 +81,8 @@ function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent: () =>
           {!listing.contactEmail && <span role="tooltip" id={`contact-tooltip-${listing._id}`} className="contact-tooltip">No email contact found. Use the listing's contact form.</span>}
         </span>
       </div>
-    </article>)}</div>
+    </article>)}</div></section>)}
+    {results.omittedMustMisses > 0 && <p className="muted">{results.omittedMustMisses} additional listings missing a must-have are not shown.</p>}
     {contact && <InquiryForm listing={contact} preferences={results.preferences} onClose={() => setContact(null)} onSent={() => { setContact(null); onSent(); }} />}
   </>;
 }

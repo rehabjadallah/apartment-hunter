@@ -84,10 +84,19 @@ dialog::backdrop { background: #23332966; backdrop-filter: blur(4px); }
 .empty { text-align: center; padding: 56px 28px; margin: 24px 0; }
 .empty p { color: #66715f; line-height: 1.6; }
 .listing-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px; }
+.listing-group { margin-bottom: 32px; }
+.listing-group > h2 { margin-bottom: 18px; }
 .listing-card { background: #fffefa; border: 1px solid #dce1d6; border-radius: 16px; padding: 24px; }
+.listing-card--miss { opacity: .9; background: #f1f2ed; color: #41463f; box-shadow: none; }
+.listing-card.listing-card--miss .listing-top, .listing-card.listing-card--miss > p, .listing-card.listing-card--miss details, .listing-card.listing-card--miss .price, .listing-card.listing-card--miss a { color: #41463f; }
+.listing-card--miss .match-tags span { background: #e1e4db; }
+.listing-card--miss button:disabled { opacity: 1; background: #535a51; }
+.listing-card .misses { font-weight: 600; }
+.price-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.preference-count { font-size: 12px; color: #414d3e; }
 .listing-top, .listing-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .listing-top { font-size: 12px; color: #66715f; margin-bottom: 20px; }
-.listing-card h2 { font-size: 22px; line-height: 1.35; }
+.listing-card h3 { font-size: 22px; line-height: 1.35; }
 .listing-card > p { font-size: 14px; line-height: 1.6; color: #66715f; }
 .listing-card .price { font-size: 25px; color: #263c30; font-weight: 600; margin: 12px 0; }
 .price small { font-size: 13px; font-weight: 400; }

@@ -46,7 +46,12 @@ export const results = query({
     const user = await requireUser(ctx);
     const search = await ctx.db.get(searchId);
     if (!search || search.userId !== user._id) throw new ConvexError("Search not found.");
-    return { ...search, listings: await ctx.db.query("listings").withIndex("by_search", q => q.eq("searchId", searchId)).collect() };
+    const listings = await ctx.db.query("listings").withIndex("by_search", q => q.eq("searchId", searchId)).collect();
+    listings.sort((a, b) => a.mustMisses - b.mustMisses || b.score - a.score ||
+      (a.rent === undefined ? (b.rent === undefined ? 0 : 1) : b.rent === undefined ? -1 : a.rent - b.rent));
+    const matches = listings.filter(listing => listing.mustMisses === 0);
+    const misses = listings.filter(listing => listing.mustMisses > 0);
+    return { ...search, listings: [...matches, ...misses.slice(0, 20)], omittedMustMisses: Math.max(0, misses.length - 20) };
   },
 });
 
