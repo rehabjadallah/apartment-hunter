@@ -92,7 +92,14 @@ function InquiryForm({ listing, preferences: p, onClose, onSent }: { listing: Do
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const bedrooms = p.bedrooms.values;
-  const draft = `Hello,\n\nI'm interested in ${listing.title}:\n${listing.url}\n\nI'm looking for ${bedrooms.length === 1 && bedrooms[0] === 0 ? "a studio" : bedrooms.length ? `a ${bedrooms.join(" or ")}-bedroom apartment` : "an apartment"} in Ann Arbor, with monthly rent between ${money(p.minRent)} and ${money(p.maxRent)}, and a move-in date around ${p.moveIn}.\n${p.pets.values.length ? `I have a ${p.pets.values.join(" and a ")}. Please confirm your pet policy and any fees.\n` : ""}${p.amenities.some(item => item.key === "parking") ? "I need parking.\n" : ""}${p.amenities.some(item => item.key === "laundry") ? "I need in-unit laundry.\n" : ""}${p.notes ? `Additional preferences: ${p.notes}\n` : ""}\nCould you confirm availability, total monthly costs, lease terms, and how to schedule a tour?\n\nThank you!`;
+  const counts = bedrooms.filter(value => value > 0);
+  const apartment = [bedrooms.includes(0) ? "a studio" : "", counts.length ? `a ${counts.join(" or ")} bedroom apartment` : ""].filter(Boolean).join(" or ") || "an apartment";
+  const conjunction = new Intl.ListFormat("en-US", { style: "long", type: "conjunction" });
+  const amenities = p.amenities.filter(item => item.weight !== "nice").map(item => amenityLabels[item.key].toLowerCase());
+  const niceAmenities = new Set(p.amenities.filter(item => item.weight === "nice").map(item => amenityLabels[item.key].toLowerCase()));
+  const unconfirmed = listing.unknowns.filter(line => line.endsWith(" not confirmed"))
+    .map(line => line.replace(/:? not confirmed$/, "").toLowerCase()).filter(label => !niceAmenities.has(label));
+  const draft = `Hello,\n\nI'm interested in ${listing.title}:\n${listing.url}\n\nI'm looking for ${apartment} in Ann Arbor, with monthly rent between ${money(p.minRent)} and ${money(p.maxRent)}, and a move-in date around ${p.moveIn}.\n${p.pets.values.length ? `I have a ${p.pets.values.join(" and a ")}. Please confirm your pet policy and any fees.\n` : ""}${amenities.length ? `I'm looking for ${conjunction.format(amenities)}.\n` : ""}${p.notes ? `Additional preferences: ${p.notes}\n` : ""}${unconfirmed.length ? `Could you clarify the details the listing did not confirm: ${conjunction.format(unconfirmed)}?\n` : ""}\nCould you confirm availability, total monthly costs, lease terms, and how to schedule a tour?\n\nThank you!`;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const data = new FormData(event.currentTarget); setPending(true); setError("");
     try { await send({ listingId: listing._id, subject: String(data.get("subject")), body: String(data.get("body")) }); onSent(); }

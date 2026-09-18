@@ -140,6 +140,36 @@ test("offline: empty groups have no headings and an empty search explains the re
   await expect(page.getByRole("heading", { name: "Missing something you marked must-have" })).toHaveCount(0);
 });
 
+test("offline: inquiry drafts name selected bedrooms, pets, priorities, and unknown details", async ({ page }) => {
+  const listing = { ...resultsFixture.listings[2], unknowns: [...resultsFixture.listings[2].unknowns, "Furnished: not confirmed"] };
+  await fixture(page, "results", { results: { ...resultsFixture, listings: [listing], omittedMustMisses: 0 } });
+  await page.getByRole("button", { name: "Follow up" }).click();
+  const draft = await page.getByLabel("Your message").inputValue();
+  expect(draft).toContain("a 1 or 2 bedroom apartment");
+  expect(draft).toContain("I have a cat and a dog.");
+  expect(draft).toContain("I'm looking for parking and in-unit laundry.");
+  expect(draft).not.toMatch(/furnished/i);
+  expect(draft).toContain("Could you clarify the details the listing did not confirm: floor and bathrooms?");
+  expect(draft).not.toContain("conflicts with");
+  expect(draft).toContain("Could you confirm availability, total monthly costs, lease terms, and how to schedule a tour?");
+  await expect(page.getByLabel("Subject")).toHaveValue("Apartment inquiry: Known must-have conflicts");
+  await expect(page.getByLabel("Your message")).toHaveAttribute("maxlength", "5000");
+  await expect(page.getByTestId("submissions")).toHaveText("[]");
+});
+
+for (const { values, phrase } of [
+  { values: [0], phrase: "a studio in Ann Arbor" },
+  { values: [0, 2], phrase: "a studio or a 2 bedroom apartment in Ann Arbor" },
+  { values: [], phrase: "an apartment in Ann Arbor" },
+]) {
+  test(`offline: inquiry drafts describe ${phrase}`, async ({ page }) => {
+    await fixture(page, "results", { results: { ...resultsFixture, preferences: { ...savedPreferences, bedrooms: { values, weight: "must" } },
+      listings: [resultsFixture.listings[0]], omittedMustMisses: 0 } });
+    await page.getByRole("button", { name: "Follow up" }).click();
+    await expect(page.getByLabel("Your message")).toHaveValue(new RegExp(phrase));
+  });
+}
+
 // Opt-in live smoke test: creates a disposable account and runs one Firecrawl search.
 // It never sends an inquiry.
 test("sign-up, search, persisted preferences, and sign-in", async ({ page }) => {
