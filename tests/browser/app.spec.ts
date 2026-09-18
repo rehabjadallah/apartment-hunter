@@ -49,7 +49,7 @@ async function fixture(page: Page, view: "preferences" | "results", props: Recor
 test("offline: two bedroom selections submit one search", async ({ page }) => {
   await fixture(page, "preferences");
   const bedrooms = page.getByRole("group", { name: "Bedrooms", exact: true });
-  await expect(bedrooms.getByRole("button", { name: "1 bedroom", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await bedrooms.getByRole("button", { name: "1 bedroom", exact: true }).click();
   await bedrooms.getByRole("button", { name: "2 bedrooms", exact: true }).click();
   await page.getByLabel("Move-in date").fill("2026-11-01");
   await page.getByRole("button", { name: "Find my apartments" }).click();
@@ -59,30 +59,44 @@ test("offline: two bedroom selections submit one search", async ({ page }) => {
   expect(submissions[0].preferences.bedrooms).toEqual({ values: [1, 2], weight: "must" });
 });
 
-test("offline: weight controls require a selected value", async ({ page }) => {
+test("offline: selections are must-haves and cleared filters have no preference", async ({ page }) => {
   await fixture(page, "preferences");
+  await expect(page.getByRole("button", { pressed: true })).toHaveCount(0);
+  await expect(page.getByRole("radiogroup")).toHaveCount(0);
   const bathrooms = page.getByRole("group", { name: "Bathrooms", exact: true });
-  const must = bathrooms.getByRole("radio", { name: "Must have", exact: true });
-  await expect(must).toBeDisabled();
   await bathrooms.getByRole("button", { name: "1 bathroom", exact: true }).click();
-  await expect(must).toBeEnabled();
-  await must.check();
   await bathrooms.getByRole("button", { name: "1 bathroom", exact: true }).click();
-  await expect(must).toBeDisabled();
-  await expect(page.getByRole("radiogroup", { name: "Parking importance" })).toHaveCount(0);
   await page.getByRole("button", { name: "Parking", exact: true }).click();
-  await expect(page.getByRole("radiogroup", { name: "Parking importance" }).getByRole("radio", { name: "Nice to have" })).toBeChecked();
+  await page.getByRole("button", { name: "Parking", exact: true }).click();
+  await page.getByRole("button", { name: "In-unit laundry", exact: true }).click();
+  await page.getByRole("button", { name: "Dog", exact: true }).click();
+  await page.getByLabel("Minimum square feet").fill("700");
+  await page.getByLabel("Minimum square feet").fill("");
+  await expect(page.getByRole("radio")).toHaveCount(0);
+  await page.getByLabel("Move-in date").fill("2026-11-01");
+  await page.getByRole("button", { name: "Find my apartments" }).click();
+  await expect(page.getByTestId("submissions")).toHaveText(JSON.stringify([{ preferences: {
+    city: "Ann Arbor, Michigan", minRent: 800, maxRent: 2000, moveIn: "2026-11-01", notes: "",
+    bedrooms: { values: [], weight: "must" }, bathrooms: { values: [], weight: "must" }, floors: { values: [], weight: "must" },
+    leaseMonths: { values: [], weight: "must" }, sqft: { weight: "must" }, pets: { values: ["dog"], weight: "must" },
+    amenities: [{ key: "laundry", weight: "must" }],
+  } }]));
 });
 
-test("offline: saved criteria seed every control and survive submission", async ({ page }) => {
+test("offline: saved selections survive submission as must-haves", async ({ page }) => {
   await fixture(page, "preferences", { initial: savedPreferences });
   await expect(page.getByRole("button", { name: "2 bedrooms", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "Dog", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Minimum square feet")).toHaveValue("700");
   await expect(page.getByLabel("Maximum square feet")).toHaveValue("1100");
-  await expect(page.getByRole("radiogroup", { name: "In-unit laundry importance" }).getByRole("radio", { name: "Really want" })).toBeChecked();
+  await expect(page.getByRole("button", { name: "In-unit laundry", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("radio")).toHaveCount(0);
   await page.getByRole("button", { name: "Find my apartments" }).click();
-  await expect(page.getByTestId("submissions")).toHaveText(JSON.stringify([{ preferences: savedPreferences }]));
+  await expect(page.getByTestId("submissions")).toHaveText(JSON.stringify([{ preferences: {
+    ...savedPreferences, bathrooms: { values: [2], weight: "must" }, floors: { values: [3], weight: "must" },
+    sqft: { min: 700, max: 1100, weight: "must" }, leaseMonths: { values: [6, 12], weight: "must" },
+    amenities: [{ key: "parking", weight: "must" }, { key: "laundry", weight: "must" }, { key: "furnished", weight: "must" }],
+  } }]));
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/preferences-mobile.png" });
@@ -188,6 +202,7 @@ test("sign-up, search, persisted preferences, and sign-in", async ({ page }) => 
   await expect(page.getByRole("dialog")).toBeVisible({ timeout: 30000 });
   await page.getByLabel("Move-in date").fill("2026-11-01");
   await page.getByLabel("Maximum monthly rent").fill("2500");
+  await page.getByRole("group", { name: "Bedrooms", exact: true }).getByRole("button", { name: "1 bedroom", exact: true }).click();
   await page.getByRole("group", { name: "Bedrooms", exact: true }).getByRole("button", { name: "2 bedrooms", exact: true }).click();
   await page.getByRole("button", { name: "Find my apartments" }).click();
   await expect(page.getByRole("dialog")).not.toBeVisible();

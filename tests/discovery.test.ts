@@ -197,6 +197,7 @@ test("discovery reads multiple bedroom values from migrated preferences", async 
 test("discovery does not require a bedroom when that criterion is unused", async () => {
   const result = await run([{ ...matching, units: [{ ...matchingUnit, bedrooms: 2 }, { ...matchingUnit, bedrooms: null }] }], undefined, false,
     { bedrooms: { values: [], weight: "must" } });
+  expect(mocks.search).toHaveBeenCalledWith(expect.anything(), "Named apartment communities in Ann Arbor Michigan with floor plan pages cat friendly", expect.anything());
   expect(result.listings).toHaveLength(2);
   for (const listing of result.listings) {
     expect(listing.score).toBe(20);

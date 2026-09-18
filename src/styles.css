@@ -57,11 +57,6 @@ fieldset { padding: 0; border: 0; min-width: 0; display: grid; gap: 18px; }
 .value-toggles { display: flex; flex-wrap: wrap; gap: 8px; }
 .value-toggles button, .amenity-option > button { background: #fffefa; color: #263c30; border: 1px solid #7c8c74; padding: 9px 12px; }
 .value-toggles button[aria-pressed="true"], .amenity-option > button[aria-pressed="true"] { background: #2d4937; color: #fffefa; border-color: #2d4937; }
-.weight-control { gap: 0; }
-.weight-control [role="radiogroup"] { display: flex; flex-wrap: wrap; gap: 8px 14px; }
-.weight-control label { display: flex; align-items: center; gap: 5px; font-size: 12px; }
-.weight-control input { width: 16px; height: 16px; margin: 0; accent-color: #2d4937; }
-.weight-control:disabled { color: #66715f; }
 .amenity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .amenity-option { display: grid; align-content: start; gap: 10px; }
 .muted, .fine-print { color: #66715f; line-height: 1.6; }

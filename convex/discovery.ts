@@ -116,13 +116,14 @@ export const run = internalAction({
     const search = await ctx.runQuery(internal.searches.get, { searchId });
     if (!search || search.status !== "searching") return null;
     const p = search.preferences;
-    const queryBedrooms = p.bedrooms.values[0] ?? 1; const queryPet = p.pets.values.length ? p.pets.values[0] : "none";
+    const queryBedrooms = p.bedrooms.values[0]; const queryPet = p.pets.values.length ? p.pets.values[0] : "none";
+    const bedroomTerm = queryBedrooms === undefined ? "" : queryBedrooms === 0 ? "studio " : `${queryBedrooms} bedroom `;
     const counts = { urlsReturned: 0, urlsAfterDeduplication: 0, urlsSelectedForScrape: 0,
       pagesWithContent: 0, listingsInserted: 0, unitsExtracted: 0, unitsInserted: 0, unitsScored: 0, unitsWithMustMisses: 0 };
     let error: string | undefined;
     try {
       const response = await firecrawl.search(ctx,
-        `Named apartment communities in Ann Arbor Michigan with ${queryBedrooms === 0 ? "studio" : `${queryBedrooms} bedroom`} floor plan pages ${queryPet === "none" ? "" : `${queryPet} friendly`}`,
+        `Named apartment communities in Ann Arbor Michigan with ${bedroomTerm}floor plan pages ${queryPet === "none" ? "" : `${queryPet} friendly`}`,
         { limit: 20, location: "Ann Arbor, Michigan, United States", sources: ["web"],
           excludeDomains: ["zillow.com", "apartments.com", "realtor.com", "redfin.com", "reddit.com",
             "facebook.com", "yelp.com", "hometogo.com", "tripadvisor.com", "airbnb.com", "vrbo.com",

@@ -2,6 +2,16 @@
 
 Branch: `flexible-filters`
 
+## September 18 update — simplify selections
+
+This update supersedes the priority controls and defaults below. Keep the
+multi-select toggles, including the amenity grid, but remove every weight control.
+Each selected criterion uses `must`; an empty criterion means no preference.
+New forms start with no optional selections. Saved selections are restored and
+submitted as must-haves when used for a new search. A blank bedroom selection
+must also omit the bedroom term from the discovery query instead of defaulting
+to one bedroom. Existing search results retain their recorded scores.
+
 ## 1. Objective
 
 A search must return a ranked list, not a filtered one.
