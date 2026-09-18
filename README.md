@@ -22,9 +22,11 @@ In a second terminal:
 npm run dev
 ```
 
-Open the URL printed by Vite. Create a username/password account, fill out the
-preferences modal, and start a search. Preferences and search history are saved
-to your account. Vite restarts when `.env.local` changes.
+Open the URL printed by Vite. Create a username/password account, enter the name
+you'd like to see in your greeting, fill out the preferences modal, and start a
+search. Your name, preferences, and search history are saved to your account.
+Existing accounts without a saved name are prompted after sign-in.
+Vite restarts when `.env.local` changes.
 
 ## Authentication
 

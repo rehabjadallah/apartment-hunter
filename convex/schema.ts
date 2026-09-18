@@ -9,7 +9,7 @@ export const preferences = v.object({
 });
 
 export default defineSchema({
-  users: defineTable({ preferences: v.optional(preferences), inboxId: v.optional(v.string()) }),
+  users: defineTable({ name: v.optional(v.string()), preferences: v.optional(preferences), inboxId: v.optional(v.string()) }),
   searches: defineTable({
     userId: v.id("users"), preferences,
     status: v.union(v.literal("searching"), v.literal("complete"), v.literal("failed")),

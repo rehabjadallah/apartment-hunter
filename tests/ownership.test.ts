@@ -20,6 +20,19 @@ async function fixture() {
 }
 
 describe("Private apartment data", () => {
+  test("saving a name requires sign-in and only changes the signed-in user's profile", async () => {
+    const { t, owner, stranger } = await fixture();
+    await expect(t.mutation(api.users.saveName, { name: "Alex" })).rejects.toThrow("Please sign in");
+    await t.withIdentity({ subject: owner }).mutation(api.users.saveName, { name: "  Alex Taylor  " });
+    expect((await t.run(ctx => ctx.db.get(owner)))?.name).toBe("Alex Taylor");
+    expect((await t.run(ctx => ctx.db.get(stranger)))?.name).toBeUndefined();
+  });
+  test.each(["", "   ", "a".repeat(101)])("invalid names cannot replace a saved name (%j)", async name => {
+    const { t, owner } = await fixture();
+    await t.run(ctx => ctx.db.patch(owner, { name: "Alex" }));
+    await expect(t.withIdentity({ subject: owner }).mutation(api.users.saveName, { name })).rejects.toThrow("Please enter a name between 1 and 100 characters");
+    expect((await t.run(ctx => ctx.db.get(owner)))?.name).toBe("Alex");
+  });
   test("anonymous callers cannot read searches or send inquiries", async () => {
     const { t, listingId } = await fixture();
     await expect(t.query(api.searches.list)).rejects.toThrow("Please sign in");
