@@ -32,6 +32,8 @@ async function fixture(page: Page, view: "preferences" | "results", props: Recor
         return "fixture-search";
       },
       watchQuery: () => ({ localQueryResult: () => props.results, onUpdate: () => () => {}, journal: () => undefined }),
+      // Offline runs have no OpenAI access, so drafting fails and the fallback template is asserted below.
+      action: async () => { throw new Error("offline"); },
     };
     const Component = ${view === "preferences" ? '(await import("/src/Preferences.tsx")).default' : '(await import("/src/Dashboard.tsx")).Results'};
     ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(ConvexProvider, { client },

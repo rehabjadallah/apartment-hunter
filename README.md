@@ -49,11 +49,20 @@ password changes; account recovery and email verification are not implemented.
 
 ## Service credentials
 
-Keep `AGENTMAIL_API_KEY` and `FIRECRAWL_API_KEY` in the selected Convex
-deployment's environment settings. No local copies are needed. Never prefix
-service secrets with `VITE_`, which exposes variables to the browser.
+Keep `AGENTMAIL_API_KEY`, `FIRECRAWL_API_KEY`, and `OPENAI_API_KEY` in the
+selected Convex deployment's environment settings. No local copies are needed.
+Never prefix service secrets with `VITE_`, which exposes variables to the
+browser. `OPENAI_MODEL` is optional and defaults to `gpt-5.1`.
 
-`convex/discovery.ts` searches for Ann Arbor apartments and reads up to five
+`convex/drafts.ts` generates the inquiry email. `drafts.compose` sends the
+listing's confirmed matches and its unconfirmed details to OpenAI and asks for a
+message that raises each unconfirmed detail by name. Output is clamped to the
+limits `inquiries.send` enforces. If the key is missing or the request fails,
+the inquiry form falls back to a template draft, so the flow still works without
+OpenAI configured. Run `npx convex run services:checkOpenai` to confirm the key
+and model before relying on it.
+
+`convex/discovery.ts` searches for Ann Arbor apartments and reads up to 15
 pages using Firecrawl structured extraction. Known conflicts with budget,
 bedrooms, pets, parking, or in-unit laundry are excluded. Missing details,
 move-in availability, and free-text preferences remain explicitly unconfirmed.

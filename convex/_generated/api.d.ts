@@ -10,6 +10,7 @@
 
 import type * as auth from "../auth.js";
 import type * as discovery from "../discovery.js";
+import type * as drafts from "../drafts.js";
 import type * as health from "../health.js";
 import type * as http from "../http.js";
 import type * as inquiries from "../inquiries.js";
@@ -28,6 +29,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   discovery: typeof discovery;
+  drafts: typeof drafts;
   health: typeof health;
   http: typeof http;
   inquiries: typeof inquiries;
