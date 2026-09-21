@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { ConvexError } from "convex/values";
@@ -83,6 +83,7 @@ export function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent
 
 function InquiryForm({ listing, preferences: p, onClose, onSent }: { listing: Doc<"listings">; preferences: Doc<"searches">["preferences"]; onClose: () => void; onSent: () => void }) {
   const send = useMutation(api.inquiries.send);
+  const compose = useAction(api.drafts.compose);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const bedrooms = p.bedrooms.values;
@@ -92,18 +93,37 @@ function InquiryForm({ listing, preferences: p, onClose, onSent }: { listing: Do
   const amenities = p.amenities.map(item => amenityLabels[item.key].toLowerCase());
   const unconfirmed = listing.unknowns.filter(line => line.endsWith(" not confirmed"))
     .map(line => line.replace(/:? not confirmed$/, "").toLowerCase());
-  const draft = `Hello,\n\nI'm interested in ${listing.title}:\n${listing.url}\n\nI'm looking for ${apartment} in Ann Arbor, with monthly rent between ${money(p.minRent)} and ${money(p.maxRent)}, and a move-in date around ${p.moveIn}.\n${p.pets.values.length ? `I have a ${p.pets.values.join(" and a ")}. Please confirm your pet policy and any fees.\n` : ""}${amenities.length ? `I'm looking for ${conjunction.format(amenities)}.\n` : ""}${p.notes ? `Additional preferences: ${p.notes}\n` : ""}${unconfirmed.length ? `Could you clarify the details the listing did not confirm: ${conjunction.format(unconfirmed)}?\n` : ""}\nCould you confirm availability, total monthly costs, lease terms, and how to schedule a tour?\n\nThank you!`;
+  // Used until the model answers, and kept as the draft when drafting fails.
+  const fallbackSubject = `Apartment inquiry: ${listing.title}`.slice(0, 200);
+  const fallbackDraft = `Hello,\n\nI'm interested in ${listing.title}:\n${listing.url}\n\nI'm looking for ${apartment} in Ann Arbor, with monthly rent between ${money(p.minRent)} and ${money(p.maxRent)}, and a move-in date around ${p.moveIn}.\n${p.pets.values.length ? `I have a ${p.pets.values.join(" and a ")}. Please confirm your pet policy and any fees.\n` : ""}${amenities.length ? `I'm looking for ${conjunction.format(amenities)}.\n` : ""}${p.notes ? `Additional preferences: ${p.notes}\n` : ""}${unconfirmed.length ? `Could you clarify the details the listing did not confirm: ${conjunction.format(unconfirmed)}?\n` : ""}\nCould you confirm availability, total monthly costs, lease terms, and how to schedule a tour?\n\nThank you!`;
+  const [subject, setSubject] = useState(fallbackSubject);
+  const [body, setBody] = useState(fallbackDraft);
+  const [drafting, setDrafting] = useState(true);
+  // OpenAI writes the inquiry from the listing's unconfirmed details; the modal opens first and fills in.
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const draft = await compose({ listingId: listing._id });
+        if (active) { setSubject(draft.subject); setBody(draft.body); }
+      } catch { /* The fallback template is already in state. */ }
+      finally { if (active) setDrafting(false); }
+    })();
+    return () => { active = false; };
+  }, [compose, listing._id]);
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); const data = new FormData(event.currentTarget); setPending(true); setError("");
-    try { await send({ listingId: listing._id, subject: String(data.get("subject")), body: String(data.get("body")) }); onSent(); }
+    event.preventDefault(); setPending(true); setError("");
+    try { await send({ listingId: listing._id, subject, body }); onSent(); }
     catch (e) { setError(e instanceof ConvexError ? String(e.data) : "Couldn't send your inquiry. Please try again."); }
     finally { setPending(false); }
   }
+  const busy = pending || drafting;
   return <Modal title="Start the conversation" onClose={onClose}><p className="muted">To: {listing.contactEmail}</p><form onSubmit={submit}>
-    <label>Subject<input name="subject" defaultValue={`Apartment inquiry: ${listing.title}`.slice(0, 200)} maxLength={200} required disabled={pending} /></label>
-    <label>Your message<textarea className="email-body" name="body" defaultValue={draft} maxLength={5000} required disabled={pending} /></label>
+    <label>Subject<input name="subject" value={subject} onChange={event => setSubject(event.target.value)} maxLength={200} required disabled={busy} /></label>
+    <label>Your message<textarea className="email-body" name="body" value={body} onChange={event => setBody(event.target.value)} maxLength={5000} required disabled={busy} /></label>
+    {drafting && <p role="status" className="muted">Drafting your message…</p>}
     <p className="fine-print">Sending creates an Apartment Hunter inbox for you. Check replies in Conversations. Only send after reviewing the recipient and message.</p>
-    {error && <p role="alert" className="error">{error}</p>}<button disabled={pending}>{pending ? "Preparing inquiry…" : "Send inquiry"}</button>
+    {error && <p role="alert" className="error">{error}</p>}<button disabled={busy}>{drafting ? "Drafting…" : pending ? "Preparing inquiry…" : "Send inquiry"}</button>
   </form></Modal>;
 }
 
