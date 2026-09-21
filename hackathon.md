@@ -12,9 +12,9 @@
 - **Components:** @convex-dev/auth (core, password, username), @convex-dev/static-hosting, @firecrawl/firecrawl-convex, @agentmail/convex
 - **Convex features:** schema, indexes, queries, mutations, actions, scheduled functions, realtime queries, HTTP routes
 - **Auth:** Convex Auth v2 preview
-- **AI models:** OpenAI gpt-5.1, for inquiry drafting (`convex/drafts.ts`)
+- **AI models:** OpenAI gpt-5.1 by default, overridable with `OPENAI_MODEL`, for inquiry drafting (`convex/drafts.ts`)
 - **Started:** 2026-09-04T19:57:21Z
-- **Last updated:** 2026-09-21T19:00:00Z
+- **Last updated:** 2026-09-21T23:21:51Z
 
 ## Log
 
@@ -64,3 +64,10 @@ Generated output is clamped to the subject and body limits `inquiries.send` alre
 The previous template remains as the seeded fallback, so a missing key, a rate limit, or a slow response still yields a usable draft. The inquiry fields became controlled inputs so a late-arriving draft renders.
 Added `services.checkOpenai`, which verifies the key and that the configured model is available without spending tokens.
 Verification passed typecheck and 128 unit tests, nine of them new for ownership, clamping, and drafting failures (`tests/drafts.test.ts`). `services:checkOpenai` returned connected with gpt-4o-mini available. No email was sent.
+
+### 2026-09-21 - 90d6a1e
+Committed the AI inquiry drafting work previously logged as a working tree update (`convex/drafts.ts`, `src/Dashboard.tsx`).
+Confirmed `gpt-5.1` as the code default, overridable with `OPENAI_MODEL`; the prompt asks about open details and renter notes while excluding known conflicts.
+The inquiry form shows a drafting status and disables editing and sending until generation finishes; failures retain the template (`src/Dashboard.tsx`).
+The result-card label removal is also committed (`3e2c18a`), and flexible filters are merged (`0c015fd`).
+Reviewed committed source and draft tests for this entry (`tests/drafts.test.ts`); no new runtime checks were run.
