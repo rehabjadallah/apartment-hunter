@@ -4,10 +4,7 @@ import { action, internalQuery } from "./_generated/server";
 import { requireUser } from "./users";
 import type { Doc } from "./_generated/dataModel";
 import type { Preferences } from "./schema";
-
-// Overridable without a code deploy so the model can be changed from the dashboard.
-// Exported so the health check reports on the model drafting will actually use.
-export const model = () => process.env.OPENAI_MODEL ?? "gpt-5.1";
+import { chatJson, model } from "./openai";
 
 // Mirrors the limits enforced by inquiries.send so a generated draft can always be sent.
 const MAX_SUBJECT = 200;
@@ -71,35 +68,13 @@ export function draftFacts(listing: Listing, p: Preferences) {
 }
 
 // Separate from compose so a draft can be generated without an authenticated caller.
-export async function generate(key: string, facts: ReturnType<typeof draftFacts>, model: string) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model, response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: instructions },
-          { role: "user", content: JSON.stringify(facts) },
-        ],
-      }),
-    });
-    if (!response.ok) throw new Error(`OpenAI returned ${response.status}`);
-    const payload = await response.json();
-    const content = payload?.choices?.[0]?.message?.content;
-    if (typeof content !== "string") throw new Error("No message content returned");
-    const parsed = JSON.parse(content);
-    const subject = cleanSubject(typeof parsed.subject === "string" ? parsed.subject : "");
-    const body = cleanBody(typeof parsed.body === "string" ? parsed.body : "");
-    // The caller falls back to its template rather than showing an empty form.
-    if (!subject || !body) throw new Error("Generated draft was empty");
-    return { subject, body };
-  } finally {
-    clearTimeout(timeout);
-  }
+export async function generate(key: string, facts: ReturnType<typeof draftFacts>, _model = model()) {
+  const parsed = await chatJson({ key, instructions, payload: facts });
+  const subject = cleanSubject(typeof parsed.subject === "string" ? parsed.subject : "");
+  const body = cleanBody(typeof parsed.body === "string" ? parsed.body : "");
+  // The caller falls back to its template rather than showing an empty form.
+  if (!subject || !body) throw new Error("Generated draft was empty");
+  return { subject, body };
 }
 
 export const draftContext = internalQuery({
@@ -121,7 +96,7 @@ export const compose = action({
     const key = process.env.OPENAI_API_KEY;
     if (!key) throw new ConvexError("Drafting is unavailable right now.");
     try {
-      return await generate(key, draftFacts(listing, preferences), model());
+      return await generate(key, draftFacts(listing, preferences));
     } catch (error) {
       // Keep provider details out of the UI while retaining a server-side diagnosis.
       console.error("Draft generation failed", error instanceof Error ? error.message : "Unknown error");

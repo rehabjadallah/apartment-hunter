@@ -12,7 +12,7 @@
 - **Components:** @convex-dev/auth (core, password, username), @convex-dev/static-hosting, @firecrawl/firecrawl-convex, @agentmail/convex
 - **Convex features:** schema, indexes, queries, mutations, actions, scheduled functions, realtime queries, HTTP routes
 - **Auth:** Convex Auth v2 preview
-- **AI models:** OpenAI gpt-5.1 by default, overridable with `OPENAI_MODEL`, for inquiry drafting (`convex/drafts.ts`)
+- **AI models:** OpenAI gpt-5.1 by default, overridable with `OPENAI_MODEL`, for inquiry drafting (`convex/drafts.ts`) and natural-language search filters (`convex/preferences.ts`)
 - **Started:** 2026-09-04T19:57:21Z
 - **Last updated:** 2026-09-21T23:21:51Z
 

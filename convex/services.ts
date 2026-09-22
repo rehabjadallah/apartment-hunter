@@ -3,7 +3,7 @@ import { FirecrawlClient } from "@firecrawl/firecrawl-convex";
 import { v } from "convex/values";
 import { components } from "./_generated/api";
 import { internalAction } from "./_generated/server";
-import { model } from "./drafts";
+import { model } from "./openai";
 
 const agentmail = new AgentMail(components.agentmail);
 const firecrawl = new FirecrawlClient(components.firecrawl);

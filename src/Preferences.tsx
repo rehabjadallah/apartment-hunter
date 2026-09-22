@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useMutation } from "convex/react";
+import { useAction, useMutation } from "convex/react";
 import { ConvexError } from "convex/values";
 import { api } from "../convex/_generated/api";
 import type { Doc, Id } from "../convex/_generated/dataModel";
@@ -21,19 +21,30 @@ function Choices<T extends number | string>({ label, options, values, onChange }
 
 export default function Preferences({ initial, onClose, onSearch }: { initial?: Doc<"users">["preferences"]; onClose: () => void; onSearch: (id: Id<"searches">) => void }) {
   const start = useMutation(api.searches.start);
+  const parse = useAction(api.preferences.parse);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [described, setDescribed] = useState("");
+  const [parsing, setParsing] = useState(false);
+  const [parseError, setParseError] = useState("");
+  const [filled, setFilled] = useState(false);
   const [criteria, setCriteria] = useState<SearchPreferences>(initial ?? {
     city: "Ann Arbor, Michigan", minRent: 800, maxRent: 2000, moveIn: "", notes: "",
     bedrooms: { values: [], weight: "must" }, bathrooms: { values: [], weight: "must" }, floors: { values: [], weight: "must" },
     leaseMonths: { values: [], weight: "must" }, sqft: { weight: "must" }, pets: { values: [], weight: "must" }, amenities: [],
   });
+  // Fills the filters below rather than searching, so a misread is something to correct, not a failed search.
+  async function fill() {
+    if (!described.trim()) return;
+    setParsing(true); setParseError(""); setFilled(false);
+    try { setCriteria(await parse({ text: described })); setFilled(true); }
+    catch (e) { setParseError(e instanceof ConvexError ? String(e.data) : "Couldn't read that. Try rephrasing, or fill in the filters below."); }
+    finally { setParsing(false); }
+  }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setPending(true); setError("");
-    const data = new FormData(event.currentTarget);
     try {
-      onSearch(await start({ preferences: { ...criteria, minRent: Number(data.get("minRent")), maxRent: Number(data.get("maxRent")),
-        moveIn: String(data.get("moveIn")), notes: String(data.get("notes")),
+      onSearch(await start({ preferences: { ...criteria,
         bedrooms: { ...criteria.bedrooms, weight: "must" }, bathrooms: { ...criteria.bathrooms, weight: "must" },
         floors: { ...criteria.floors, weight: "must" }, leaseMonths: { ...criteria.leaseMonths, weight: "must" },
         sqft: { ...criteria.sqft, weight: "must" }, pets: { ...criteria.pets, weight: "must" },
@@ -42,11 +53,20 @@ export default function Preferences({ initial, onClose, onSearch }: { initial?: 
     } catch (e) { setError(e instanceof ConvexError ? String(e.data) : "We couldn't start your search. Please try again."); }
     finally { setPending(false); }
   }
+  const reading = parsing || pending;
   return <Modal title="What feels like home?" onClose={onClose}><p className="muted">Let's find your place in Ann Arbor, Michigan.</p>
-    <form onSubmit={submit}><fieldset disabled={pending}><div className="form-grid">
-      <label>Minimum monthly rent<input name="minRent" type="number" min="0" max="20000" defaultValue={initial?.minRent ?? 800} required /></label>
-      <label>Maximum monthly rent<input name="maxRent" type="number" min="0" max="20000" defaultValue={initial?.maxRent ?? 2000} required /></label>
-      <label>Move-in date<input name="moveIn" type="date" defaultValue={initial?.moveIn} required /></label>
+    <fieldset className="criterion"><legend>Describe it instead</legend>
+      <label>In your own words<input value={described} maxLength={500} disabled={reading} placeholder="1 bedroom under $1400, dog-friendly, in-unit laundry, moving in November"
+        onChange={e => { setDescribed(e.target.value); setFilled(false); }}
+        onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void fill(); } }} /></label>
+      <button type="button" onClick={() => void fill()} disabled={reading || !described.trim()}>{parsing ? "Reading…" : "Fill in the filters"}</button>
+      {parseError && <p role="alert" className="error">{parseError}</p>}
+      {filled && <p role="status" className="fine-print">Filled in below. Change anything that's wrong before searching.</p>}
+    </fieldset>
+    <form onSubmit={submit}><fieldset disabled={reading}><div className="form-grid">
+      <label>Minimum monthly rent<input name="minRent" type="number" min="0" max="20000" value={criteria.minRent} onChange={e => setCriteria({ ...criteria, minRent: Number(e.target.value) })} required /></label>
+      <label>Maximum monthly rent<input name="maxRent" type="number" min="0" max="20000" value={criteria.maxRent} onChange={e => setCriteria({ ...criteria, maxRent: Number(e.target.value) })} required /></label>
+      <label>Move-in date<input name="moveIn" type="date" value={criteria.moveIn} onChange={e => setCriteria({ ...criteria, moveIn: e.target.value })} required /></label>
     </div>
     <p className="fine-print">Only listings with confirmed matches for every selected filter will appear. Leave a filter blank if you have no preference.</p>
     <Choices label="Bedrooms" options={[0, 1, 2, 3, 4, 5, 6].map(value => ({ value, label: value === 0 ? "Studio" : `${value} bedroom${value > 1 ? "s" : ""}` }))}
@@ -69,7 +89,7 @@ export default function Preferences({ initial, onClose, onSearch }: { initial?: 
         amenities: selected ? criteria.amenities.filter(item => item.key !== key) : [...criteria.amenities, { key, weight: "must" }],
       })}>{amenityLabels[key]}</button></div>;
     })}</div></fieldset>
-    <label>Anything else? <span className="muted">Optional</span><textarea name="notes" maxLength={500} defaultValue={initial?.notes} placeholder="Accessibility needs, lease length, preferred neighborhoods…" /></label>
+    <label>Anything else? <span className="muted">Optional</span><textarea name="notes" maxLength={500} value={criteria.notes} onChange={e => setCriteria({ ...criteria, notes: e.target.value })} placeholder="Accessibility needs, lease length, preferred neighborhoods…" /></label>
     <p className="fine-print">We'll flag details that need confirmation, including move-in availability and additional preferences.</p>
     {error && <p role="alert" className="error">{error}</p>}<button>{pending ? "Starting search…" : "Find my apartments"}</button>
     </fieldset></form></Modal>;
