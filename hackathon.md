@@ -3,18 +3,37 @@
 - **Project:** apartment-hunter
 - **Event:** Convex All Gas Hackathon
 - **What it does:** Shows signed-in users Ann Arbor apartments that meet their selected filters and lets them review rental inquiries before sending.
-- **Live app:** https://affable-chipmunk-297.convex.site/
+- **Live app:** https://adorable-dove-404.convex.site/
 - **Repo:** https://github.com/rehabjadallah/apartment-hunter
 - **Demo video:** pending
 - **Social post:** pending
 - **Frontend:** Convex static hosting
-- **Convex deployment:** https://affable-chipmunk-297.convex.cloud
+- **Convex deployment:** https://adorable-dove-404.convex.cloud (production); https://affable-chipmunk-297.convex.cloud (development)
 - **Components:** @convex-dev/auth (core, password, username), @convex-dev/static-hosting, @firecrawl/firecrawl-convex, @agentmail/convex
 - **Convex features:** schema, indexes, queries, mutations, actions, scheduled functions, realtime queries, HTTP routes
 - **Auth:** Convex Auth v2 preview
 - **AI models:** OpenAI gpt-5.1 by default, overridable with `OPENAI_MODEL`, for inquiry drafting (`convex/drafts.ts`) and natural-language search filters (`convex/preferences.ts`)
 - **Started:** 2026-09-04T19:57:21Z
 - **Last updated:** 2026-09-22T00:23:35Z
+
+## Summary
+
+Apartment Hunter finds rentals in Ann Arbor, Michigan and only shows a listing
+when every filter the renter selected is confirmed on the property's own page.
+Unstated facts stay explicitly unconfirmed rather than being guessed, because a
+rental search that invents "pets allowed" wastes a real person's afternoon.
+
+Describe a search in one sentence and OpenAI fills the filters, which the renter
+corrects before searching. Firecrawl then searches and scrapes real property
+floor-plan pages and extracts every published unit. For a matching listing with a
+published leasing email, OpenAI drafts an inquiry that asks the office about
+exactly the details the page never stated, and AgentMail sends it and returns
+replies. Nothing is sent without the renter reviewing it.
+
+Built on Convex: schema and indexes, queries, mutations, actions, scheduled
+functions, realtime queries that stream results into the grid as they are saved,
+HTTP routes, Convex Auth v2, and static hosting, plus the Firecrawl and AgentMail
+components. Live at https://adorable-dove-404.convex.site/
 
 ## Log
 
