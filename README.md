@@ -54,6 +54,12 @@ selected Convex deployment's environment settings. No local copies are needed.
 Never prefix service secrets with `VITE_`, which exposes variables to the
 browser. `OPENAI_MODEL` is optional and defaults to `gpt-5.1`.
 
+`convex/preferences.ts` turns one sentence into search filters. `preferences.parse`
+sends the description and today's date to OpenAI and coerces the result to the
+value sets `searches.start` accepts, dropping anything else, so a misread cannot
+break the form or the search. It fills the filters rather than starting a search,
+so the renter reviews and corrects first.
+
 `convex/drafts.ts` generates the inquiry email. `drafts.compose` sends the
 listing's confirmed matches and its unconfirmed details to OpenAI and asks for a
 message that raises each unconfirmed detail by name. Output is clamped to the

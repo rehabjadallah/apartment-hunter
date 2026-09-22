@@ -12,9 +12,9 @@
 - **Components:** @convex-dev/auth (core, password, username), @convex-dev/static-hosting, @firecrawl/firecrawl-convex, @agentmail/convex
 - **Convex features:** schema, indexes, queries, mutations, actions, scheduled functions, realtime queries, HTTP routes
 - **Auth:** Convex Auth v2 preview
-- **AI models:** OpenAI gpt-5.1 by default, overridable with `OPENAI_MODEL`, for inquiry drafting (`convex/drafts.ts`)
+- **AI models:** OpenAI gpt-5.1 by default, overridable with `OPENAI_MODEL`, for inquiry drafting (`convex/drafts.ts`) and natural-language search filters (`convex/preferences.ts`)
 - **Started:** 2026-09-04T19:57:21Z
-- **Last updated:** 2026-09-21T23:21:51Z
+- **Last updated:** 2026-09-22T00:23:35Z
 
 ## Log
 
@@ -71,3 +71,9 @@ Confirmed `gpt-5.1` as the code default, overridable with `OPENAI_MODEL`; the pr
 The inquiry form shows a drafting status and disables editing and sending until generation finishes; failures retain the template (`src/Dashboard.tsx`).
 The result-card label removal is also committed (`3e2c18a`), and flexible filters are merged (`0c015fd`).
 Reviewed committed source and draft tests for this entry (`tests/drafts.test.ts`); no new runtime checks were run.
+
+### 2026-09-22 - a8b380e
+Added natural-language descriptions that fill editable search filters for the renter to review before searching (`src/Preferences.tsx`).
+The signed-in Convex action drops unsupported choices and normalizes rent and size ranges (`convex/preferences.ts`).
+Shared OpenAI requests with inquiry drafting, retaining the `gpt-5.1` default and 15-second timeout (`convex/openai.ts`, `convex/drafts.ts`).
+Added six mocked tests covering sign-in, empty input, parsing, invalid choices, inverted ranges, and provider errors (`tests/preferences.test.ts`). Reviewed source and tests; no runtime checks were run for this log update.
