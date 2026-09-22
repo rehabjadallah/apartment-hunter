@@ -1,7 +1,7 @@
 import { AgentMail, type OutboundId } from "@agentmail/convex";
 import { ConvexError, v } from "convex/values";
 import { components, internal } from "./_generated/api";
-import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, mutation, query, type ActionCtx } from "./_generated/server";
 import { requireUser } from "./users";
 import type { Id } from "./_generated/dataModel";
 
@@ -73,13 +73,29 @@ export const fail = internalMutation({
     if (item?.status === "preparing") await ctx.db.patch(inquiryId, { status: "failed", error: "Could not prepare this inquiry. No message was queued." });
   },
 });
+// A per-user inbox is preferred, but the AgentMail plan caps how many can exist.
+// Once that cap is reached creation returns 403, so fall back to an inbox this
+// account already owns rather than failing the inquiry.
+async function resolveInbox(ctx: ActionCtx, userId: Id<"users">): Promise<string> {
+  try {
+    const created = await mail.createInbox(ctx, { displayName: "Apartment Hunter", clientId: userId });
+    if (typeof created.inbox_id === "string") return created.inbox_id;
+  } catch (error) {
+    console.error("Inbox creation failed; reusing an existing inbox", error instanceof Error ? error.message : "Unknown error");
+  }
+  const existing = await mail.listInboxes(ctx, { limit: 1 });
+  const inboxId = existing.inboxes?.[0]?.inbox_id;
+  if (typeof inboxId !== "string") throw new Error("No inbox available");
+  return inboxId;
+}
+
 export const prepare = internalAction({
   args: { inquiryId: v.id("inquiries") },
   handler: async (ctx, { inquiryId }) => {
     try {
       const data = await ctx.runQuery(internal.inquiries.get, { inquiryId });
       if (!data?.user || data.inquiry.status !== "preparing") return;
-      const inboxId = data.user.inboxId ?? (await mail.createInbox(ctx, { displayName: "Apartment Hunter", clientId: data.user._id })).inbox_id;
+      const inboxId = data.user.inboxId ?? await resolveInbox(ctx, data.user._id);
       if (typeof inboxId !== "string") throw new Error("No inbox returned");
       await ctx.runMutation(internal.inquiries.enqueue, { inquiryId, inboxId });
     } catch (error) {
