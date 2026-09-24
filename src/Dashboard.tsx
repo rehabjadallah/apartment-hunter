@@ -11,6 +11,18 @@ import NamePrompt from "./NamePrompt";
 
 const money = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
 
+// The picker reads best as one short phrase, so an unnamed search describes itself: beds, budget, and the day it was saved.
+function searchLabel(search: Doc<"searches">) {
+  const p = search.preferences;
+  const when = new Date(search._creationTime).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (search.label) return `${search.label} \u00b7 ${when}`;
+  const beds = p.bedrooms.values.length
+    ? `${[...p.bedrooms.values].sort((a, b) => a - b).map(value => value === 0 ? "Studio" : value).join("\u2013")}${p.bedrooms.values.every(value => value === 0) ? "" : " bed"}`
+    : "Any beds";
+  const budget = p.minRent > 0 ? `${money(p.minRent)}\u2013${money(p.maxRent)}` : `up to ${money(p.maxRent)}`;
+  return `${beds} \u00b7 ${budget} \u00b7 ${when}`;
+}
+
 function preferenceCount(p: Doc<"searches">["preferences"], listing: Doc<"listings">) {
   const matches = listing.matches;
   const criteria = [
@@ -43,7 +55,7 @@ export default function Dashboard() {
     <section className="dashboard-heading"><div><p className="eyebrow">Ann Arbor, Michigan</p><h1>Find your <span>next chapter.</span></h1><p className="muted">Your preferences. Your shortlist. Your conversations.</p></div><button onClick={() => setEditing(true)}>New apartment search</button></section>
     <nav className="tabs" aria-label="Your apartment search"><button aria-current={tab === "search" ? "page" : undefined} onClick={() => setTab("search")}>Apartments</button><button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => setTab("inbox")}>Conversations</button></nav>
     {tab === "search" ? <>
-      {searches.length > 0 && <label className="search-picker">Your saved searches<select value={searchId} onChange={e => setSelected(e.target.value as Id<"searches">)}>{searches.map(s => <option key={s._id} value={s._id}>{new Date(s._creationTime).toLocaleDateString()} · {money(s.preferences.minRent)}–{money(s.preferences.maxRent)} · {s.preferences.bedrooms.values.length ? `${s.preferences.bedrooms.values.join(", ")} bed` : "Any"}</option>)}</select></label>}
+      {searches.length > 0 && <label className="search-picker">Your saved searches<select value={searchId} onChange={e => setSelected(e.target.value as Id<"searches">)}>{searches.map(s => <option key={s._id} value={s._id}>{searchLabel(s)}</option>)}</select></label>}
       {searchId ? <Results key={searchId} searchId={searchId} onSent={() => setTab("inbox")} /> : <section className="empty panel"><h2>A place that fits your life.</h2><p>Start with your budget and preferences. We'll look for apartments in Ann Arbor.</p><button onClick={() => setEditing(true)}>Set my preferences</button></section>}
     </> : <Conversations />}
     {(editing ?? (!user.preferences && !settings)) && <Preferences initial={user.preferences} onClose={() => setEditing(false)} onSearch={id => { setSelected(id); setEditing(false); setTab("search"); }} />}

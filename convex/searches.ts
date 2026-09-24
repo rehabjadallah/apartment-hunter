@@ -22,7 +22,7 @@ function matchesPreferences(p: Preferences, listing: Doc<"listings">) {
 }
 
 export const start = mutation({
-  args: { preferences },
+  args: { preferences, label: v.optional(v.string()) },
   returns: v.id("searches"),
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
@@ -41,7 +41,9 @@ export const start = mutation({
     const recent = await ctx.db.query("searches").withIndex("by_user", q => q.eq("userId", user._id)).order("desc").first();
     if (recent && Date.now() - recent._creationTime < 60_000) throw new ConvexError("Please wait a minute before starting another search.");
     await ctx.db.patch(user._id, { preferences: p });
-    const searchId = await ctx.db.insert("searches", { userId: user._id, preferences: p, status: "searching" });
+    // A name is the renter's own words for this search; the picker falls back to a summary when it is blank.
+    const label = args.label?.trim().slice(0, 60);
+    const searchId = await ctx.db.insert("searches", { userId: user._id, preferences: p, status: "searching", ...(label ? { label } : {}) });
     await ctx.scheduler.runAfter(0, internal.discovery.run, { searchId });
     await ctx.scheduler.runAfter(180_000, internal.searches.timeout, { searchId });
     return searchId;

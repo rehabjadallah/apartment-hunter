@@ -18,7 +18,7 @@ export type Preferences = Infer<typeof preferences>;
 export default defineSchema({
   users: defineTable({ name: v.optional(v.string()), preferences: v.optional(preferences), inboxId: v.optional(v.string()) }),
   searches: defineTable({
-    userId: v.id("users"), preferences,
+    userId: v.id("users"), preferences, label: v.optional(v.string()),
     status: v.union(v.literal("searching"), v.literal("complete"), v.literal("failed")),
     error: v.optional(v.string()),
   }).index("by_user", ["userId"]),
