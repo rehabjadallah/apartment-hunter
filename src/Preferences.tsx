@@ -28,6 +28,7 @@ export default function Preferences({ initial, onClose, onSearch }: { initial?: 
   const [parsing, setParsing] = useState(false);
   const [parseError, setParseError] = useState("");
   const [filled, setFilled] = useState(false);
+  const [label, setLabel] = useState("");
   const [criteria, setCriteria] = useState<SearchPreferences>(initial ?? {
     city: "Ann Arbor, Michigan", minRent: 800, maxRent: 2000, moveIn: "", notes: "",
     bedrooms: { values: [], weight: "must" }, bathrooms: { values: [], weight: "must" }, floors: { values: [], weight: "must" },
@@ -44,7 +45,7 @@ export default function Preferences({ initial, onClose, onSearch }: { initial?: 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setPending(true); setError("");
     try {
-      onSearch(await start({ preferences: { ...criteria,
+      onSearch(await start({ label, preferences: { ...criteria,
         bedrooms: { ...criteria.bedrooms, weight: "must" }, bathrooms: { ...criteria.bathrooms, weight: "must" },
         floors: { ...criteria.floors, weight: "must" }, leaseMonths: { ...criteria.leaseMonths, weight: "must" },
         sqft: { ...criteria.sqft, weight: "must" }, pets: { ...criteria.pets, weight: "must" },
@@ -63,7 +64,10 @@ export default function Preferences({ initial, onClose, onSearch }: { initial?: 
       {parseError && <p role="alert" className="error">{parseError}</p>}
       {filled && <p role="status" className="fine-print">Filled in below. Change anything that's wrong before searching.</p>}
     </fieldset>
-    <form onSubmit={submit}><fieldset disabled={reading}><div className="form-grid">
+    <form onSubmit={submit}><fieldset disabled={reading}>
+    <label>Name this search <span className="muted">Optional</span><input name="label" maxLength={60} value={label}
+      onChange={e => setLabel(e.target.value)} placeholder="Kerrytown 1-bed" /></label>
+    <div className="form-grid">
       <label>Minimum monthly rent<input name="minRent" type="number" min="0" max="20000" value={criteria.minRent} onChange={e => setCriteria({ ...criteria, minRent: Number(e.target.value) })} required /></label>
       <label>Maximum monthly rent<input name="maxRent" type="number" min="0" max="20000" value={criteria.maxRent} onChange={e => setCriteria({ ...criteria, maxRent: Number(e.target.value) })} required /></label>
       <label>Move-in date<input name="moveIn" type="date" value={criteria.moveIn} onChange={e => setCriteria({ ...criteria, moveIn: e.target.value })} required /></label>

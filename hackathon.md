@@ -14,7 +14,7 @@
 - **Auth:** Convex Auth v2 preview
 - **AI models:** OpenAI gpt-5.1 by default, overridable with `OPENAI_MODEL`, for inquiry drafting (`convex/drafts.ts`) and natural-language search filters (`convex/preferences.ts`)
 - **Started:** 2026-09-04T19:57:21Z
-- **Last updated:** 2026-09-22T00:23:35Z
+- **Last updated:** 2026-09-24T22:25:49Z
 
 ## Summary
 
@@ -96,3 +96,10 @@ Added natural-language descriptions that fill editable search filters for the re
 The signed-in Convex action drops unsupported choices and normalizes rent and size ranges (`convex/preferences.ts`).
 Shared OpenAI requests with inquiry drafting, retaining the `gpt-5.1` default and 15-second timeout (`convex/openai.ts`, `convex/drafts.ts`).
 Added six mocked tests covering sign-in, empty input, parsing, invalid choices, inverted ranges, and provider errors (`tests/preferences.test.ts`). Reviewed source and tests; no runtime checks were run for this log update.
+
+### 2026-09-24 - working tree
+Added optional search names to the preferences form and show them with the saved date in the picker; unnamed searches describe bedrooms, budget, and date (`src/Preferences.tsx`, `src/Dashboard.tsx`).
+The Convex search mutation trims names, caps them at 60 characters, and stores only nonblank labels in an optional schema field (`convex/searches.ts`, `convex/schema.ts`).
+Restyled the saved-search picker with a wider layout, dropdown arrow, and hover border (`src/styles.css`).
+Also recorded commit `bb705d7`: inquiry preparation falls back to an existing AgentMail inbox when creation fails or returns no inbox ID, including when the account reaches its inbox cap (`convex/inquiries.ts`).
+Reviewed the committed inbox change and all five unstaged files; no runtime checks were run for this log update.
