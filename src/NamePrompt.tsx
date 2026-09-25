@@ -20,7 +20,6 @@ export default function NamePrompt() {
   }
 
   return <section className="auth-card name-prompt" aria-labelledby="name-prompt-title">
-    <p className="eyebrow">Make yourself at home</p>
     <h2 id="name-prompt-title">What should we call you?</h2>
     <p>We'll use your name to greet you when you sign in.</p>
     <form onSubmit={submit}>

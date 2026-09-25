@@ -10,19 +10,19 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean
 }
 export default function App({ connected }: { connected: boolean }) {
   return <main>
-    <header><a className="brand" href="/">⌂ <span>Apartment Hunter</span></a><span className="badge">Ann Arbor, MI</span></header>
+    <header><a className="brand" href="/"><svg className="mark" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><path d="M3.5 10.2 12 3.5l8.5 6.7V20a.5.5 0 0 1-.5.5h-5.2v-6h-5.6v6H4a.5.5 0 0 1-.5-.5z" /></svg><span>Apartment Hunter</span></a><span className="badge">Ann Arbor, MI</span></header>
     <ErrorBoundary>
       {!connected ? <p>Connect the development deployment to get started.</p> : <>
-        <AuthLoading><p role="status" className="empty">Getting your space ready…</p></AuthLoading>
+        <AuthLoading><p role="status" className="empty">Loading…</p></AuthLoading>
         <Unauthenticated><div className="welcome"><section className="intro">
-          <p className="eyebrow">Less searching. More living.</p>
-          <h1>Your next place.<br /><span>Starts here.</span></h1>
-          <p className="subtitle">Find an apartment in Ann Arbor that fits your life. Tell us what matters. We'll help with the search and the follow-up.</p>
-          <div className="steps"><span>01 &nbsp; Set your preferences</span><span>02 &nbsp; Explore your matches</span><span>03 &nbsp; Start a conversation</span></div>
+          <p className="eyebrow">Rentals in Ann Arbor</p>
+          <h1>Only the listings that <span>actually match.</span></h1>
+          <p className="subtitle">Set your filters once. Apartment Hunter reads each listing, keeps only the ones that confirm every filter on the page, and shows you what the listing left out.</p>
+          <div className="steps"><span><b>01</b> Set your filters</span><span><b>02</b> See what each listing confirms</span><span><b>03</b> Email the landlord</span></div>
         </section><AuthForm /></div></Unauthenticated>
         <Authenticated><Dashboard /></Authenticated>
       </>}
     </ErrorBoundary>
-    <footer>Apartment Hunter <span>Room for what's next.</span></footer>
+    <footer>Apartment Hunter <span>Ann Arbor, Michigan</span></footer>
   </main>;
 }

@@ -23,19 +23,6 @@ function searchLabel(search: Doc<"searches">) {
   return `${beds} \u00b7 ${budget} \u00b7 ${when}`;
 }
 
-function preferenceCount(p: Doc<"searches">["preferences"], listing: Doc<"listings">) {
-  const matches = listing.matches;
-  const criteria = [
-    [p.bedrooms.values.length > 0, matches.some(line => line === "Studio" || /^\d+ bedrooms$/.test(line))],
-    [p.bathrooms.values.length > 0, matches.some(line => line.endsWith(" bathrooms"))],
-    [p.sqft.min !== undefined || p.sqft.max !== undefined, matches.some(line => line.endsWith(" sq ft"))],
-    [p.floors.values.length > 0, matches.some(line => line.startsWith("Floor "))],
-    [p.pets.values.length > 0, p.pets.values.every(pet => matches.includes(pet === "cat" ? "Cats allowed" : "Dogs allowed"))],
-    [p.leaseMonths.values.length > 0, matches.some(line => line.endsWith(" month lease"))],
-    ...p.amenities.map(amenity => [true, matches.includes(amenityLabels[amenity.key])]),
-  ].filter(([selected]) => selected);
-  return `${criteria.filter(([, confirmed]) => confirmed).length} of ${criteria.length} preferences`;
-}
 
 export default function Dashboard() {
   const user = useQuery(api.users.current);
@@ -52,11 +39,11 @@ export default function Dashboard() {
     <div className="account-bar"><span>{user.name ? `Hello, ${user.name}` : "Welcome!"}</span><div><button className="text-button" onClick={() => setSettings(true)}>Account</button><button className="text-button" onClick={() => { void signOut().catch(() => setError("Unable to sign out. Please try again.")); }}>Sign out</button></div></div>
     {error && <p role="alert" className="error">{error}</p>}
     {!user.name ? <NamePrompt /> : <>
-    <section className="dashboard-heading"><div><p className="eyebrow">Ann Arbor, Michigan</p><h1>Find your <span>next chapter.</span></h1><p className="muted">Your preferences. Your shortlist. Your conversations.</p></div><button onClick={() => setEditing(true)}>New apartment search</button></section>
+    <section className="dashboard-heading"><div><p className="eyebrow">Ann Arbor, Michigan</p><h1>Your searches</h1></div><button onClick={() => setEditing(true)}>New apartment search</button></section>
     <nav className="tabs" aria-label="Your apartment search"><button aria-current={tab === "search" ? "page" : undefined} onClick={() => setTab("search")}>Apartments</button><button aria-current={tab === "inbox" ? "page" : undefined} onClick={() => setTab("inbox")}>Conversations</button></nav>
     {tab === "search" ? <>
       {searches.length > 0 && <label className="search-picker">Your saved searches<select value={searchId} onChange={e => setSelected(e.target.value as Id<"searches">)}>{searches.map(s => <option key={s._id} value={s._id}>{searchLabel(s)}</option>)}</select></label>}
-      {searchId ? <Results key={searchId} searchId={searchId} onSent={() => setTab("inbox")} /> : <section className="empty panel"><h2>A place that fits your life.</h2><p>Start with your budget and preferences. We'll look for apartments in Ann Arbor.</p><button onClick={() => setEditing(true)}>Set my preferences</button></section>}
+      {searchId ? <Results key={searchId} searchId={searchId} onSent={() => setTab("inbox")} /> : <section className="empty panel"><h2>No searches yet</h2><p>Set your rent range and filters. Apartment Hunter checks Ann Arbor listings against every one of them.</p><button onClick={() => setEditing(true)}>Set my preferences</button></section>}
     </> : <Conversations />}
     {(editing ?? (!user.preferences && !settings)) && <Preferences initial={user.preferences} onClose={() => setEditing(false)} onSearch={id => { setSelected(id); setEditing(false); setTab("search"); }} />}
     </>}
@@ -69,28 +56,54 @@ export function Results({ searchId, onSent }: { searchId: Id<"searches">; onSent
   const [contact, setContact] = useState<Doc<"listings"> | null>(null);
   if (!results) return <p role="status">Loading apartments…</p>;
   return <>
-    {results.status === "searching" && <div className="search-progress" role="status"><span className="spinner" /><div><strong>Looking around Ann Arbor…</strong><p>Finding listings and checking the details. Results will appear here as they're ready.</p></div></div>}
+    {results.status === "searching" && <div className="search-progress" role="status"><span className="spinner" /><div><strong>Checking Ann Arbor listings…</strong><p>Results appear here as each listing is read.</p></div></div>}
     {results.error && <p role="alert" className="error">{results.error}</p>}
     {results.status === "complete" && !results.listings.length && <section className="empty panel"><h2>No listings match your selected filters.</h2><p>Try removing a filter or widening your budget.</p></section>}
-    {results.listings.length > 0 && <><p className="muted" role="status">{results.listings.length} matching apartment{results.listings.length === 1 ? "" : "s"}</p>
-    <section className="listing-group"><h2>Matching apartments</h2>
-    <div className="listing-grid">{results.listings.map(listing => <article className="listing-card" key={listing._id}>
-      <div className="listing-top"><span>Ann Arbor</span><span>{listing.bedrooms === undefined ? "Beds unconfirmed" : listing.bedrooms === 0 ? "Studio" : `${listing.bedrooms} bed`}</span></div>
-      <h3>{listing.title}</h3>
-      {listing.complexName && <p className="complex-name">{listing.complexName}</p>}
-      <div className="price-row"><p className="price">{listing.rent === undefined ? "Ask about pricing" : <>{money(listing.rent)} <small>/ month</small></>}</p>
-    </div>
-      <p>{listing.summary}</p><div className="match-tags">{listing.matches.map(m => <span key={m}>{m}</span>)}</div>
-      <details><summary>Details to confirm ({listing.unknowns.length})</summary><ul>{listing.unknowns.map(u => <li key={u}>{u}</li>)}</ul></details>
-      <div className="listing-actions"><a href={listing.url} target="_blank" rel="noopener noreferrer">View listing ↗</a>
-        <span className="follow-up" tabIndex={!listing.contactEmail ? 0 : undefined} aria-describedby={!listing.contactEmail ? `contact-tooltip-${listing._id}` : undefined}>
-          <button disabled={!listing.contactEmail} onClick={() => setContact(listing)}>Follow up</button>
-          {!listing.contactEmail && <span role="tooltip" id={`contact-tooltip-${listing._id}`} className="contact-tooltip">No email contact found. Use the listing's contact form.</span>}
-        </span>
-      </div>
-    </article>)}</div></section></>}
+    {results.listings.length > 0 && <section className="listing-group">
+    <div className="listing-group-head"><h2>Matching apartments</h2><p className="results-count" role="status">{results.listings.length} result{results.listings.length === 1 ? "" : "s"}</p></div>
+    <div className="listing-grid">{results.listings.map(listing =>
+      <ListingCard key={listing._id} listing={listing} preferences={results.preferences} onFollowUp={() => setContact(listing)} />)}</div></section>}
     {contact && <InquiryForm listing={contact} preferences={results.preferences} onClose={() => setContact(null)} onSent={() => { setContact(null); onSent(); }} />}
   </>;
+}
+
+// Rent leads, then the community, then the floor plan: one entry point per card rather
+// than three headings of near-equal size.
+const VISIBLE_TAGS = 3;
+
+function ListingCard({ listing, preferences, onFollowUp }: { listing: Doc<"listings">; preferences: Doc<"searches">["preferences"]; onFollowUp: () => void }) {
+  const [showAllTags, setShowAllTags] = useState(false);
+  const beds = listing.bedrooms === undefined ? "Beds unconfirmed" : listing.bedrooms === 0 ? "Studio" : `${listing.bedrooms} bed`;
+  const heading = listing.complexName ?? listing.title;
+  // The city, the rent range, and the bedroom count are already on the card above, so as
+  // chips they spend the three visible slots without telling the reader anything new.
+  // They sort to the back rather than being dropped, so a thin listing still shows chips.
+  const city = preferences.city.split(",")[0];
+  const echoesTheCard = (match: string) =>
+    match === city || match === "Within your rent range" || match === "Studio" || /^\d+ bedrooms$/.test(match);
+  const ranked = [...listing.matches].sort((a, b) => Number(echoesTheCard(a)) - Number(echoesTheCard(b)));
+  const tags = showAllTags ? ranked : ranked.slice(0, VISIBLE_TAGS);
+  const hidden = ranked.length - tags.length;
+  return <article className="listing-card">
+    <div className="listing-top"><span>{beds}</span></div>
+    {listing.rent === undefined
+      ? <p className="price-unknown">Ask about pricing</p>
+      : <p className="price">{money(listing.rent)} <small>/ month</small></p>}
+    <h3>{heading}</h3>
+    {listing.complexName && <p className="floor-plan">{listing.title}</p>}
+    <p className="summary">{listing.summary}</p>
+    {listing.matches.length > 0 && <div className="match-tags">
+      {tags.map(m => <span key={m}>{m}</span>)}
+      {hidden > 0 && <button type="button" onClick={() => setShowAllTags(true)}>+{hidden} more</button>}
+    </div>}
+    {listing.unknowns.length > 0 && <details><summary>Details to confirm ({listing.unknowns.length})</summary><ul>{listing.unknowns.map(u => <li key={u}>{u}</li>)}</ul></details>}
+    <div className="listing-actions"><a href={listing.url} target="_blank" rel="noopener noreferrer">View listing ↗</a>
+      <span className="follow-up" tabIndex={!listing.contactEmail ? 0 : undefined} aria-describedby={!listing.contactEmail ? `contact-tooltip-${listing._id}` : undefined}>
+        <button disabled={!listing.contactEmail} onClick={onFollowUp}>Follow up</button>
+        {!listing.contactEmail && <span role="tooltip" id={`contact-tooltip-${listing._id}`} className="contact-tooltip">No email contact found. Use the listing's contact form.</span>}
+      </span>
+    </div>
+  </article>;
 }
 
 function InquiryForm({ listing, preferences: p, onClose, onSent }: { listing: Doc<"listings">; preferences: Doc<"searches">["preferences"]; onClose: () => void; onSent: () => void }) {
@@ -130,11 +143,11 @@ function InquiryForm({ listing, preferences: p, onClose, onSent }: { listing: Do
     finally { setPending(false); }
   }
   const busy = pending || drafting;
-  return <Modal title="Start the conversation" onClose={onClose}><p className="muted">To: {listing.contactEmail}</p><form onSubmit={submit}>
+  return <Modal title="Email the landlord" onClose={onClose}><p className="muted">To: {listing.contactEmail}</p><form onSubmit={submit}>
     <label>Subject<input name="subject" value={subject} onChange={event => setSubject(event.target.value)} maxLength={200} required disabled={busy} /></label>
     <label>Your message<textarea className="email-body" name="body" value={body} onChange={event => setBody(event.target.value)} maxLength={5000} required disabled={busy} /></label>
     {drafting && <p role="status" className="muted">Drafting your message…</p>}
-    <p className="fine-print">Sending creates an Apartment Hunter inbox for you. Check replies in Conversations. Only send after reviewing the recipient and message.</p>
+    <p className="fine-print">Sending creates an inbox for you, and replies arrive under Conversations. Check the recipient and the message before you send.</p>
     {error && <p role="alert" className="error">{error}</p>}<button disabled={busy}>{drafting ? "Drafting…" : pending ? "Preparing inquiry…" : "Send inquiry"}</button>
   </form></Modal>;
 }
@@ -148,7 +161,7 @@ function Conversations() {
   if (!inquiries) return <p role="status">Loading conversations…</p>;
   return <>
     {error && <p role="alert" className="error">{error}</p>}
-    {!inquiries.length && <section className="empty panel"><h2>Your conversations start here.</h2><p>Choose an apartment and review an inquiry to get in touch.</p></section>}
+    {!inquiries.length && <section className="empty panel"><h2>No inquiries sent yet</h2><p>Pick a listing and send the landlord a message. Their replies arrive here.</p></section>}
     {inquiries.map(item => <article className="conversation panel" key={item._id}><div className="panel-heading"><h2>{item.title}</h2><span className="pill">{item.delivery?.status ?? item.status}</span></div><p>{item.subject}</p>
       {(item.error || item.delivery?.errorMessage) && <p role="alert" className="error">{item.error ?? "There was a problem delivering this inquiry."}</p>}
       <button className="secondary" disabled={pending !== null || !item.delivery?.threadId} onClick={async () => {
