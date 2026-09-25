@@ -102,12 +102,13 @@ test("offline: saved selections survive submission as required filters", async (
 test("offline: matching results keep listing links and follow-up keyboard-accessible", async ({ page }) => {
   await fixture(page, "results", { results: resultsFixture });
   await expect(page.getByRole("heading", { name: "Matching apartments", exact: true })).toBeVisible();
-  await expect(page.getByText("1 matching apartment", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 result", { exact: true })).toBeVisible();
   await expect(page.getByText(/must-have|Close —|Misses:/)).toHaveCount(0);
   await expect(page.getByRole("article")).toHaveCount(1);
   const card = page.getByRole("article");
   await expect(card).toHaveClass("listing-card");
-  await expect(card.locator("h3 + .complex-name")).toHaveText("Maple Grove Apartments");
+  await expect(card.locator("h3")).toHaveText("Maple Grove Apartments");
+  await expect(card.locator("h3 + .floor-plan")).toHaveText("All preferences confirmed");
   const link = card.getByRole("link", { name: "View listing" });
   for (let i = 0; i < 20 && !await link.evaluate(element => element === document.activeElement); i++) await page.keyboard.press("Tab");
   await expect(link).toBeFocused();
@@ -118,7 +119,7 @@ test("offline: matching results keep listing links and follow-up keyboard-access
   await popup.close();
   await expect(card.getByRole("button", { name: "Follow up" })).toBeEnabled();
   await card.getByRole("button", { name: "Follow up" }).click();
-  await expect(page.getByRole("dialog", { name: "Start the conversation" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Email the landlord" })).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.screenshot({ path: "test-results/matching-results.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });

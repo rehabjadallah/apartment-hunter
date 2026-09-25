@@ -55,7 +55,7 @@ export default function Preferences({ initial, onClose, onSearch }: { initial?: 
     finally { setPending(false); }
   }
   const reading = parsing || pending;
-  return <Modal title="What feels like home?" onClose={onClose}><p className="muted">Let's find your place in Ann Arbor, Michigan.</p>
+  return <Modal title="New search" onClose={onClose}>
     <fieldset className="criterion"><legend>Describe it instead</legend>
       <label>In your own words<input value={described} maxLength={500} disabled={reading} placeholder="1 bedroom under $1400, dog-friendly, in-unit laundry, moving in November"
         onChange={e => { setDescribed(e.target.value); setFilled(false); }}

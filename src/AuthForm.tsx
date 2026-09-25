@@ -33,9 +33,9 @@ export default function AuthForm() {
       if (result.status !== "complete") setError(authError(result.userError));
     } catch { setError("Unable to connect. Please try again."); }
   }
-  return <section className="auth-card"><p className="eyebrow">Your search, saved</p>
-    <h2>{creating ? "Make yourself at home." : "Welcome back."}</h2>
-    <p>Save your preferences, find apartments, and keep your conversations in one place.</p>
+  return <section className="auth-card">
+    <h2>{creating ? "Create an account" : "Welcome back"}</h2>
+    <p>Your filters and sent inquiries stay on your account.</p>
     <form onSubmit={submit}>
       <label>Username<input name="username" autoComplete="username" required disabled={pending} /></label>
       <label>Password<input name="password" type="password" autoComplete={creating ? "new-password" : "current-password"} minLength={MIN_PASSWORD_LENGTH} required disabled={pending} /></label>
